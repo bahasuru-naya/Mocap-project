@@ -1,1 +1,3 @@
-.\mocap_env\Scripts\activate 
+.\.venv\Scripts\activate 
+
+python 3dmodel.py 
