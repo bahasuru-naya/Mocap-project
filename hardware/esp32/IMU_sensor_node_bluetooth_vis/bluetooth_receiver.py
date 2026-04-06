@@ -5,7 +5,7 @@ import websockets
 from threading import Thread
 
 # Bluetooth COM port
-BLUETOOTH_PORT = "COM6"  # Your port
+BLUETOOTH_PORT = "COM5"  # Your port
 BAUD_RATE = 115200
 
 # WebSocket server
@@ -81,8 +81,10 @@ def bluetooth_listener():
             except Exception as e:
                 print(f"Error: {e}")
                 
-    except serial.SerialException:
+    except serial.SerialException as es:
+        print(f"Error: {es}")
         print(f"✗ Cannot open port {BLUETOOTH_PORT}")
+        
         print("Available ports: Check Device Manager")
 
 async def start_websocket_server():
