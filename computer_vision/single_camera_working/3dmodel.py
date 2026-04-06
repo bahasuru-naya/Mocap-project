@@ -26,6 +26,30 @@ cap = cv2.VideoCapture(0)
 print(f"--- SENDER STARTING ---")
 print(f"Target: {UDP_IP}:{UDP_PORT}")
 print("Press 'q' on the video window to quit.")
+print("\nNew Point Layout (23 points):")
+print("0 - head (centroid)")
+print("1 - left shoulder")
+print("2 - right shoulder")
+print("3 - left elbow")
+print("4 - right elbow")
+print("5 - left wrist")
+print("6 - right wrist")
+print("7 - left pinky")
+print("8 - right pinky")
+print("9 - left index")
+print("10 - right index")
+print("11 - left thumb")
+print("12 - right thumb")
+print("13 - left hip")
+print("14 - right hip")
+print("15 - left knee")
+print("16 - right knee")
+print("17 - left ankle")
+print("18 - right ankle")
+print("19 - left heel")
+print("20 - right heel")
+print("21 - left foot index")
+print("22 - right foot index")
 
 while cap.isOpened():
     success, image = cap.read()
@@ -37,14 +61,76 @@ while cap.isOpened():
     image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     results = pose.process(image_rgb)
 
-    if results.pose_world_landmarks:
-        mp_drawing.draw_landmarks(image, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
+    if results.pose_landmarks:
+        h, w, c = image.shape
+        
         # 1. Extract Landmarks
+        all_landmarks = results.pose_landmarks.landmark
+        all_world_landmarks = results.pose_world_landmarks.landmark
+        
+        # Calculate HEAD CENTROID (average of points 0-10)
+        # Points 0-10: nose, eyes, ears, mouth
+        head_points = all_landmarks[0:11]
+        
+        head_x = sum(lm.x for lm in head_points) / len(head_points)
+        head_y = sum(lm.y for lm in head_points) / len(head_points)
+        
+        # Convert to pixel coordinates for drawing
+        head_pixel_x = int(head_x * w)
+        head_pixel_y = int(head_y * h)
+        
+        # For data sending, use world landmarks
+        left_ear = all_world_landmarks[7]
+        right_ear = all_world_landmarks[8]
+
+        head_world_x = (left_ear.x + right_ear.x) / 2
+        head_world_y = (left_ear.y + right_ear.y) / 2
+        head_world_z = (left_ear.z + right_ear.z) / 2
+        
+        # Build landmark list with HEAD as point 0, then BODY points (11-32)
         lm_list = []
-        for lm in results.pose_world_landmarks.landmark:
-            # We send [x, y, z]
-            # Negating Y here matches Blender's 'Up' axis better
-            lm_list.append([round(lm.x, 4), round(-lm.y, 4), round(lm.z, 4)]) 
+        
+        # Add head centroid as first point
+        lm_list.append([round(head_world_x, 4), round(-head_world_y, 4), round(head_world_z, 4)])
+        
+        # Add body points (original indices 11-32 become indices 1-22)
+        for idx in range(11, 33):
+            lm = all_world_landmarks[idx]
+            lm_list.append([round(lm.x, 4), round(-lm.y, 4), round(lm.z, 4)])
+        
+        # 2. Draw on Video
+        # Draw body landmarks and connections
+        for connection in mp_pose.POSE_CONNECTIONS:
+            start_idx = connection[0]
+            end_idx = connection[1]
+            
+            # Skip connections that involve head landmarks (0-10)
+            if start_idx < 11 and end_idx < 11:
+                continue
+            
+            # Adjust indices for body-only connections
+            if start_idx >= 11 and end_idx >= 11:
+                start_lm = all_landmarks[start_idx]
+                end_lm = all_landmarks[end_idx]
+                
+                start_pos = (int(start_lm.x * w), int(start_lm.y * h))
+                end_pos = (int(end_lm.x * w), int(end_lm.y * h))
+                
+                cv2.line(image, start_pos, end_pos, (0, 255, 0), 2)
+        
+        # Draw body landmarks (11-32) as circles
+        for idx in range(11, 33):
+            lm = all_landmarks[idx]
+            pos = (int(lm.x * w), int(lm.y * h))
+            cv2.circle(image, pos, 4, (0, 255, 0), -1)
+        
+        # Draw HEAD as a larger, more prominent circle
+        cv2.circle(image, (head_pixel_x, head_pixel_y), 10, (0, 0, 255), -1)  # Red filled circle
+        cv2.circle(image, (head_pixel_x, head_pixel_y), 10, (255, 255, 255), 2)  # White outline
+        
+        # Add text label for head
+        cv2.putText(image, "HEAD", (head_pixel_x - 25, head_pixel_y - 15), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
         
         # 2. Package and Send
         data = json.dumps(lm_list)
@@ -53,7 +139,7 @@ while cap.isOpened():
         # 3. DEBUG: Print to Terminal
         # We only print every 1 second so we don't lag the terminal
         if int(time.time() * 10) % 10 == 0:
-            print(f"STATUS: Sending {len(lm_list)} points. Nose X: {lm_list[0][0]}")
+            print(f"STATUS: Sending {len(lm_list)} points. Head X: {lm_list[0][0]}")
     else:
         # DEBUG: If no person is in frame
         if int(time.time() * 10) % 10 == 0:

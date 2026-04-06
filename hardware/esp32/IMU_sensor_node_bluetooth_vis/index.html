@@ -1,16 +1,17 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MPU-6500 3D Visualization</title>
+    <title>3D Visualization</title>
     <style>
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
         }
-        
+
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -20,7 +21,7 @@
             align-items: center;
             padding: 20px;
         }
-        
+
         .container {
             width: 100%;
             max-width: 1200px;
@@ -29,18 +30,18 @@
             box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
             padding: 30px;
         }
-        
+
         .header {
             text-align: center;
             margin-bottom: 30px;
         }
-        
+
         h1 {
             color: #333;
             font-size: 2.5em;
             margin-bottom: 10px;
         }
-        
+
         .status {
             display: inline-block;
             padding: 8px 16px;
@@ -50,18 +51,18 @@
             font-weight: bold;
             font-size: 0.9em;
         }
-        
+
         .status.connected {
             background: #51cf66;
         }
-        
+
         .content {
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 30px;
             align-items: center;
         }
-        
+
         #canvas {
             width: 100%;
             height: 500px;
@@ -69,18 +70,18 @@
             border-radius: 15px;
             box-shadow: inset 0 10px 30px rgba(0, 0, 0, 0.3);
         }
-        
+
         .data-panel {
             background: #f8f9fa;
             border-radius: 15px;
             padding: 25px;
             border: 2px solid #e9ecef;
         }
-        
+
         .data-group {
             margin-bottom: 25px;
         }
-        
+
         .data-group h3 {
             color: #667eea;
             font-size: 1.1em;
@@ -88,7 +89,7 @@
             text-transform: uppercase;
             letter-spacing: 1px;
         }
-        
+
         .data-item {
             display: flex;
             justify-content: space-between;
@@ -96,16 +97,16 @@
             border-bottom: 1px solid #dee2e6;
             font-size: 0.95em;
         }
-        
+
         .data-item:last-child {
             border-bottom: none;
         }
-        
+
         .label {
             color: #666;
             font-weight: 500;
         }
-        
+
         .value {
             color: #333;
             font-weight: bold;
@@ -114,7 +115,7 @@
             padding: 2px 8px;
             border-radius: 5px;
         }
-        
+
         @media (max-width: 900px) {
             .content {
                 grid-template-columns: 1fr;
@@ -122,16 +123,17 @@
         }
     </style>
 </head>
+
 <body>
     <div class="container">
         <div class="header">
-            <h1>IMU  Sensor Node Visualization</h1>
+            <h1>IMU Sensor Node Visualization</h1>
             <div class="status" id="status">Waiting for connection...</div>
         </div>
-        
+
         <div class="content">
             <canvas id="canvas"></canvas>
-            
+
             <div class="data-panel">
                 <div class="data-group">
                     <h3> Acceleration (m/s²)</h3>
@@ -148,7 +150,7 @@
                         <span class="value" id="az">0.000</span>
                     </div>
                 </div>
-                
+
                 <div class="data-group">
                     <h3>Rotation (rad/s)</h3>
                     <div class="data-item">
@@ -164,7 +166,7 @@
                         <span class="value" id="gz">0.000</span>
                     </div>
                 </div>
-                
+
                 <div class="data-group">
                     <h3>Sensor Temperature</h3>
                     <div class="data-item">
@@ -185,51 +187,56 @@
         const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
         renderer.setSize(canvas.clientWidth, canvas.clientHeight);
         renderer.setClearColor(0x1e3c72);
-        
+
         camera.position.z = 3;
-        
+
         // Create colorful cube
+        // Create cube with 6 DIFFERENT face colors
         const geometry = new THREE.BoxGeometry(2, 2, 2);
+
+        // IMPORTANT: exactly 6 materials (one per face)
         const materials = [
-            new THREE.MeshPhongMaterial({ color: 0xff6b6b }),  // Red - Right
-            new THREE.MeshPhongMaterial({ color: 0x4ecdc4 }),  // Teal - Left
-            new THREE.MeshPhongMaterial({ color: 0x45b7d1 }),  // Blue - Top
-            new THREE.MeshPhongMaterial({ color: 0xf7b731 }),  // Yellow - Bottom
-            new THREE.MeshPhongMaterial({ color: 0x5f27cd }),  // Purple - Front
-            new THREE.MeshPhongMaterial({ color: 0x00d2d3 })   // Cyan - Back
+            new THREE.MeshPhongMaterial({ color: 0xff0000 }), // Right - Red
+            new THREE.MeshPhongMaterial({ color: 0x00ff00 }), // Left - Green
+            new THREE.MeshPhongMaterial({ color: 0x0000ff }), // Top - Blue
+            new THREE.MeshPhongMaterial({ color: 0xffff00 }), // Bottom - Yellow
+            new THREE.MeshPhongMaterial({ color: 0xff00ff }), // Front - Magenta
+            new THREE.MeshPhongMaterial({ color: 0x00ffff })  // Back - Cyan
         ];
+
+        // Create mesh with material array
         const cube = new THREE.Mesh(geometry, materials);
         scene.add(cube);
-        
+
         // Lighting
         const light = new THREE.DirectionalLight(0xffffff, 1);
         light.position.set(5, 5, 5);
         scene.add(light);
-        
+
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
         scene.add(ambientLight);
-        
+
         // Add edges to cube
         const edges = new THREE.EdgesGeometry(geometry);
         const wireframe = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0xffffff }));
         cube.add(wireframe);
-        
+
         // Data storage
         let imuData = {
             ax: 0, ay: 0, az: 0,
             gx: 0, gy: 0, gz: 0,
             temp: 0
         };
-        
+
         // WebSocket connection
         function connectWebSocket() {
             const ws = new WebSocket('ws://127.0.0.1:5005');
-            
+
             ws.onopen = () => {
                 document.getElementById('status').textContent = 'Connected';
                 document.getElementById('status').classList.add('connected');
             };
-            
+
             ws.onmessage = (event) => {
                 try {
                     const data = JSON.parse(event.data);
@@ -239,19 +246,19 @@
                     console.error('Parse error:', e);
                 }
             };
-            
+
             ws.onerror = () => {
                 document.getElementById('status').textContent = 'Connection Error';
                 document.getElementById('status').classList.remove('connected');
             };
-            
+
             ws.onclose = () => {
                 document.getElementById('status').textContent = 'Disconnected';
                 document.getElementById('status').classList.remove('connected');
                 setTimeout(connectWebSocket, 3000);
             };
         }
-        
+
         // Update display
         function updateDisplay() {
             document.getElementById('ax').textContent = imuData.ax.toFixed(3);
@@ -262,19 +269,19 @@
             document.getElementById('gz').textContent = imuData.gz.toFixed(3);
             document.getElementById('temp').textContent = imuData.temp.toFixed(1) + '°C';
         }
-        
+
         // Animation loop
         function animate() {
             requestAnimationFrame(animate);
-            
+
             // Rotate cube based on gyro data
             cube.rotation.x += imuData.gx * 0.016;  // 0.016 ≈ 1/60
             cube.rotation.y += imuData.gy * 0.016;
             cube.rotation.z += imuData.gz * 0.016;
-            
+
             renderer.render(scene, camera);
         }
-        
+
         // Handle window resize
         window.addEventListener('resize', () => {
             const width = canvas.clientWidth;
@@ -283,10 +290,11 @@
             camera.updateProjectionMatrix();
             renderer.setSize(width, height);
         });
-        
+
         // Start
         connectWebSocket();
         animate();
     </script>
 </body>
+
 </html>
