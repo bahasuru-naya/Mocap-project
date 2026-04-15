@@ -126,11 +126,8 @@ while cap.isOpened():
         
         # Draw HEAD as a larger, more prominent circle
         cv2.circle(image, (head_pixel_x, head_pixel_y), 10, (0, 0, 255), -1)  # Red filled circle
-        cv2.circle(image, (head_pixel_x, head_pixel_y), 10, (255, 255, 255), 2)  # White outline
+        cv2.circle(image, (head_pixel_x, head_pixel_y), 10, (255, 255, 255), 2)  # White outline        
         
-        # Add text label for head
-        cv2.putText(image, "HEAD", (head_pixel_x - 25, head_pixel_y - 15), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
         
         # 2. Package and Send
         data = json.dumps(lm_list)
