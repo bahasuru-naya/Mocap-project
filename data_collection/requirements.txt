@@ -1,0 +1,7 @@
+mediapipe==0.10.5
+opencv-python
+bleak
+PyQt5
+pyqtgraph
+pandas
+numpy
