@@ -1,6 +1,7 @@
 from PyQt5.QtWidgets import *
 from PyQt5.QtCore import *
 from PyQt5.QtGui import *
+import os
 
 class CalibrationDialog(QDialog):
     def __init__(self, parent=None):
@@ -19,10 +20,29 @@ class CalibrationDialog(QDialog):
         instruction.setAlignment(Qt.AlignCenter)
         instruction.setStyleSheet("font-size: 18px; font-weight: bold; color: #bb86fc;")
         layout.addWidget(instruction)
-        
+
         self.img_label = QLabel()
         self.img_label.setAlignment(Qt.AlignCenter)
-        self.img_label.setPixmap(self.draw_stickman())
+
+        image_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "img",
+        "Position of Attention.jpg"
+        )
+        
+        pixmap = QPixmap(image_path)
+
+        # Scale while keeping aspect ratio
+        if not pixmap.isNull():
+            pixmap = pixmap.scaled(
+                250, 300,
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation
+            )
+            self.img_label.setPixmap(pixmap)
+        else:
+            self.img_label.setText("Image not found!")
+
         layout.addWidget(self.img_label)
         
         self.timer_label = QLabel(f"Calibrating in {self.countdown}...")
