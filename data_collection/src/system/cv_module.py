@@ -74,6 +74,14 @@ class CVThread(threading.Thread):
                 hx = sum(lm.x for lm in head_points) / len(head_points)
                 hy = sum(lm.y for lm in head_points) / len(head_points)
                 cv2.circle(image, (int(hx * w), int(hy * h)), 10, (0, 0, 255), -1)
+                
+                # Draw line from head to center of shoulders
+                l_shoulder = all_landmarks[11]
+                r_shoulder = all_landmarks[12]
+                shoulder_cx = (l_shoulder.x + r_shoulder.x) / 2
+                shoulder_cy = (l_shoulder.y + r_shoulder.y) / 2
+                cv2.line(image, (int(hx * w), int(hy * h)), (int(shoulder_cx * w), int(shoulder_cy * h)), (0, 255, 0), 2)
+
             
             # Put image frame in queue for Dashboard (convert back to RGB for PyQt)
             img_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)

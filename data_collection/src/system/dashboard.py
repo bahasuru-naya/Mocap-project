@@ -2,6 +2,100 @@ from PyQt5.QtWidgets import *
 from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 
+class CalibrationDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Calibration Countdown")
+        self.setFixedSize(400, 500)
+        self.countdown = 10
+        
+        layout = QVBoxLayout(self)
+        
+        # Instruction Label
+        instruction = QLabel("Please stand in the Position of Attention\n(Straight, arms at sides)")
+        instruction.setAlignment(Qt.AlignCenter)
+        instruction.setStyleSheet("font-size: 16px; font-weight: bold;")
+        layout.addWidget(instruction)
+        
+        # Image Label
+        self.img_label = QLabel()
+        self.img_label.setAlignment(Qt.AlignCenter)
+        self.img_label.setPixmap(self.draw_stickman())
+        layout.addWidget(self.img_label)
+        
+        # Countdown Label
+        self.timer_label = QLabel(f"Calibrating in {self.countdown}...")
+        self.timer_label.setAlignment(Qt.AlignCenter)
+        self.timer_label.setStyleSheet("font-size: 32px; color: #c62828; font-weight: bold;")
+        layout.addWidget(self.timer_label)
+        
+        # Timer
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update_timer)
+        self.timer.start(1000) # 1 second interval
+        
+    def draw_stickman(self):
+        pixmap = QPixmap(200, 300)
+        pixmap.fill(Qt.transparent)
+        painter = QPainter(pixmap)
+        pen = QPen(QColor("#2c3e50"), 8, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+        painter.setPen(pen)
+        
+        # Head
+        painter.drawEllipse(75, 20, 50, 50)
+        # Body
+        painter.drawLine(100, 70, 100, 180)
+        # Left Arm (Straight down)
+        painter.drawLine(100, 80, 75, 160)
+        # Right Arm (Straight down)
+        painter.drawLine(100, 80, 125, 160)
+        # Left Leg (Straight down)
+        painter.drawLine(100, 180, 80, 280)
+        # Right Leg (Straight down)
+        painter.drawLine(100, 180, 120, 280)
+        
+        painter.end()
+        return pixmap
+
+    def update_timer(self):
+        self.countdown -= 1
+        if self.countdown > 0:
+            self.timer_label.setText(f"Calibrating in {self.countdown}...")
+        else:
+            self.timer.stop()
+            self.accept()
+
+class RecordingDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Get Ready to Record")
+        self.setFixedSize(400, 200)
+        self.countdown = 5
+        
+        layout = QVBoxLayout(self)
+        
+        instruction = QLabel("Get into your starting position...")
+        instruction.setAlignment(Qt.AlignCenter)
+        instruction.setStyleSheet("font-size: 18px; font-weight: bold;")
+        layout.addWidget(instruction)
+        
+        self.timer_label = QLabel(f"Recording starts in {self.countdown}...")
+        self.timer_label.setAlignment(Qt.AlignCenter)
+        self.timer_label.setStyleSheet("font-size: 32px; color: #2e7d32; font-weight: bold;")
+        layout.addWidget(self.timer_label)
+        
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update_timer)
+        self.timer.start(1000)
+        
+    def update_timer(self):
+        self.countdown -= 1
+        if self.countdown > 0:
+            self.timer_label.setText(f"Recording starts in {self.countdown}...")
+        else:
+            self.timer.stop()
+            self.accept()
+
 class Dashboard(QMainWindow):
     def __init__(self, ble_cmd_queue, frame_queue, sync_queue, ble_status_queue, recorder, target_devices):
         super().__init__()
@@ -48,7 +142,7 @@ class Dashboard(QMainWindow):
         self.calib_btn = QPushButton("Calibrate All Sensors")
         self.calib_btn.setMinimumHeight(40)
         self.calib_btn.setMinimumWidth(140)
-        self.calib_btn.clicked.connect(self.calibrate_all)
+        self.calib_btn.clicked.connect(self.start_calibration_sequence)
         controls_layout.addWidget(self.calib_btn)
         
         self.session_input = QLineEdit()
@@ -110,6 +204,11 @@ class Dashboard(QMainWindow):
         right_panel.addStretch()
         main_layout.addLayout(right_panel, 1)
 
+    def start_calibration_sequence(self):
+        dialog = CalibrationDialog(self)
+        if dialog.exec_() == QDialog.Accepted:
+            self.calibrate_all()
+
     def calibrate_all(self):
         for dev in self.target_devices:
             self.ble_cmd_queue.put({'device': dev, 'action': 'calibrate'})
@@ -119,11 +218,13 @@ class Dashboard(QMainWindow):
         
     def toggle_recording(self):
         if not self.recorder.recording:
-            name = self.session_input.text().strip() or "mocap_session"
-            self.recorder.start_recording(name)
-            self.record_btn.setText("Stop Recording")
-            self.record_btn.setStyleSheet("background-color: #c62828; color: white; font-weight: bold; border-radius: 4px;")
-            self.session_input.setEnabled(False)
+            dialog = RecordingDialog(self)
+            if dialog.exec_() == QDialog.Accepted:
+                name = self.session_input.text().strip() or "mocap_session"
+                self.recorder.start_recording(name)
+                self.record_btn.setText("Stop Recording")
+                self.record_btn.setStyleSheet("background-color: #c62828; color: white; font-weight: bold; border-radius: 4px;")
+                self.session_input.setEnabled(False)
         else:
             self.recorder.stop_recording()
             self.record_btn.setText("Start Recording")

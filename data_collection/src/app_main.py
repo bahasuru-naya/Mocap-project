@@ -48,11 +48,17 @@ def main():
     exit_code = app.exec_()
 
     # Clean shutdown
-    print("Shutting down cleanly...")
+    print("Shutting down cleanly... Disconnecting BLE devices (this may take a few seconds)...")
     ble_thread.stop()
     cv_thread.stop()
     sync_thread.stop()
     recorder.stop_recording()
+    
+    # Crucial: Wait for the BLE thread to process the stop command and cleanly disconnect.
+    # Without this, Windows BLE stack keeps the connections open, causing errors on next launch.
+    ble_thread.join(timeout=5.0)
+    cv_thread.join(timeout=2.0)
+    sync_thread.join(timeout=2.0)
     
     sys.exit(exit_code)
 

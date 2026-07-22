@@ -44,11 +44,20 @@ class BLEThread(threading.Thread):
                 if action == 'calibrate':
                     client = self.clients.get(device_name)
                     if client and client.is_connected:
-                        try:
-                            print(f"Sending CALIBRATE to {device_name}")
-                            await client.write_gatt_char(self.CHARACTERISTIC_UUID_RX, b"CALIBRATE")
-                        except Exception as e:
-                            print(f"Failed to send command to {device_name}: {e}")
+                        for attempt in range(3):
+                            try:
+                                print(f"Sending CALIBRATE to {device_name} (Attempt {attempt+1})")
+                                # Use response=False to prevent the PC from waiting for an ACK.
+                                # This avoids the "Unreachable" errors caused by the BLE channel being busy.
+                                await client.write_gatt_char(self.CHARACTERISTIC_UUID_RX, b"CALIBRATE", response=False)
+                                print(f"Successfully sent CALIBRATE to {device_name}")
+                                break # Exit retry loop on success
+                            except Exception as e:
+                                print(f"Failed to send command to {device_name} on attempt {attempt+1}: {e}")
+                                await asyncio.sleep(0.5) # Wait before retry
+                        
+                        # Add a delay between commands to different devices to prevent overwhelming the PC's Bluetooth adapter
+                        await asyncio.sleep(0.5)
             await asyncio.sleep(0.1)
 
     def notification_handler(self, device_name):

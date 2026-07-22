@@ -22,11 +22,20 @@ bool deviceConnected = false;
 // Calibration offsets
 float gx_offset = 0, gy_offset = 0, gz_offset = 0;
 float ax_offset = 0, ay_offset = 0, az_offset = 0;
-bool is_calibrating = false;
+volatile bool is_calibrating = false;
 int calibration_samples = 0;
 const int CALIBRATION_COUNT = 100;
 float sum_gx = 0, sum_gy = 0, sum_gz = 0;
 float sum_ax = 0, sum_ay = 0, sum_az = 0;
+
+// --- Timer Interrupt Variables ---
+hw_timer_t * timer = NULL;
+volatile bool read_data = false;
+
+// The Interrupt Service Routine (ISR)
+void IRAM_ATTR onTimer() {
+  read_data = true;
+}
 
 class MyServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer* pServer) {
@@ -90,9 +99,11 @@ void setup() {
                       );
   pTxCharacteristic->addDescriptor(new BLE2902());
 
+  // Added PROPERTY_WRITE_NR to support "Write Without Response". 
+  // This helps prevent BLE bottlenecks and "Unreachable" errors.
   BLECharacteristic *pRxCharacteristic = pService->createCharacteristic(
                                            CHARACTERISTIC_UUID_RX,
-                                           BLECharacteristic::PROPERTY_WRITE
+                                           BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR
                                          );
   pRxCharacteristic->setCallbacks(new MyCallbacks());
 
@@ -102,66 +113,74 @@ void setup() {
   Serial.println("BLE UART Ready");
   Serial.print("Device Name: ");
   Serial.println(NODE_ID);
+
+  // --- Setup Hardware Timer Interrupt ---
+  // ESP32 Arduino Core 3.x Timer API
+  timer = timerBegin(1000000); // 1MHz frequency (1 tick = 1 microsecond)
+  timerAttachInterrupt(timer, &onTimer); // attach ISR
+  timerAlarm(timer, 20000, true, 0); // alarm every 20,000 ticks (20ms), autoreload
 }
 
 void loop() {
-  int16_t accelGyro[6] = {0};
+  // Only execute when the timer interrupt flag is set
+  if (read_data) {
+    read_data = false; // Reset the flag
+    
+    int16_t accelGyro[6] = {0};
 
-  if (bmi160.getAccelGyroData(accelGyro) == BMI160_OK) {
-    // Convert to meaningful units
-    float gx = accelGyro[0] * 3.14159 / 180.0;
-    float gy = accelGyro[1] * 3.14159 / 180.0;
-    float gz = accelGyro[2] * 3.14159 / 180.0;
+    if (bmi160.getAccelGyroData(accelGyro) == BMI160_OK) {
+      // Convert to meaningful units
+      float gx = accelGyro[0] * 3.14159 / 180.0;
+      float gy = accelGyro[1] * 3.14159 / 180.0;
+      float gz = accelGyro[2] * 3.14159 / 180.0;
 
-    float ax = accelGyro[3] / 16384.0;
-    float ay = accelGyro[4] / 16384.0;
-    float az = accelGyro[5] / 16384.0;
+      float ax = accelGyro[3] / 16384.0;
+      float ay = accelGyro[4] / 16384.0;
+      float az = accelGyro[5] / 16384.0;
 
-    if (is_calibrating) {
-      sum_gx += gx; sum_gy += gy; sum_gz += gz;
-      sum_ax += ax; sum_ay += ay; sum_az += (az - 1.0); // Assuming sensor is flat on table, Z should be 1g
-      calibration_samples++;
-      
-      if (calibration_samples >= CALIBRATION_COUNT) {
-        gx_offset = sum_gx / CALIBRATION_COUNT;
-        gy_offset = sum_gy / CALIBRATION_COUNT;
-        gz_offset = sum_gz / CALIBRATION_COUNT;
-        ax_offset = sum_ax / CALIBRATION_COUNT;
-        ay_offset = sum_ay / CALIBRATION_COUNT;
-        az_offset = sum_az / CALIBRATION_COUNT;
-        is_calibrating = false;
-        Serial.println("Calibration complete.");
+      if (is_calibrating) {
+        sum_gx += gx; sum_gy += gy; sum_gz += gz;
+        sum_ax += ax; sum_ay += ay; sum_az += (az - 1.0); // Assuming sensor is flat on table, Z should be 1g
+        calibration_samples++;
+        
+        if (calibration_samples >= CALIBRATION_COUNT) {
+          gx_offset = sum_gx / CALIBRATION_COUNT;
+          gy_offset = sum_gy / CALIBRATION_COUNT;
+          gz_offset = sum_gz / CALIBRATION_COUNT;
+          ax_offset = sum_ax / CALIBRATION_COUNT;
+          ay_offset = sum_ay / CALIBRATION_COUNT;
+          az_offset = sum_az / CALIBRATION_COUNT;
+          is_calibrating = false;
+          Serial.println("Calibration complete.");
+          if (deviceConnected) {
+              String calib_msg = "CALIB_DONE";
+              pTxCharacteristic->setValue(calib_msg.c_str());
+              pTxCharacteristic->notify();
+          }
+        }
+      } else {
+        // Apply calibration offsets
+        gx -= gx_offset; gy -= gy_offset; gz -= gz_offset;
+        ax -= ax_offset; ay -= ay_offset; az -= az_offset;
+
+        unsigned long timestamp = millis();
+        
+        // Send comma separated values: timestamp,ax,ay,az,gx,gy,gz
+        String data = String(timestamp) + "," +
+                      String(ax, 3) + "," +
+                      String(ay, 3) + "," +
+                      String(az, 3) + "," +
+                      String(gx, 3) + "," +
+                      String(gy, 3) + "," +
+                      String(gz, 3);
+
         if (deviceConnected) {
-            String calib_msg = "CALIB_DONE";
-            pTxCharacteristic->setValue(calib_msg.c_str());
-            pTxCharacteristic->notify();
+          pTxCharacteristic->setValue(data.c_str());
+          pTxCharacteristic->notify();
         }
       }
     } else {
-      // Apply calibration offsets
-      gx -= gx_offset; gy -= gy_offset; gz -= gz_offset;
-      ax -= ax_offset; ay -= ay_offset; az -= az_offset;
-
-      unsigned long timestamp = millis();
-      
-      // Send comma separated values: timestamp,ax,ay,az,gx,gy,gz
-      String data = String(timestamp) + "," +
-                    String(ax, 3) + "," +
-                    String(ay, 3) + "," +
-                    String(az, 3) + "," +
-                    String(gx, 3) + "," +
-                    String(gy, 3) + "," +
-                    String(gz, 3);
-
-      if (deviceConnected) {
-        pTxCharacteristic->setValue(data.c_str());
-        pTxCharacteristic->notify();
-      }
+      Serial.println("BMI160 Read Error");
     }
-  } else {
-    Serial.println("BMI160 Read Error");
   }
-
-  // 20ms delay achieves ~50Hz sampling rate
-  delay(20);
 }

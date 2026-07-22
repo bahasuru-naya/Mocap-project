@@ -1,7 +1,5 @@
-mediapipe==0.10.5
-opencv-python
-bleak
-PyQt5
-pyqtgraph
-pandas
-numpy
+aiohttp>=3.8.0
+bleak>=0.20.0
+opencv-python>=4.6.0
+mediapipe>=0.10.0
+numpy>=1.24.0
