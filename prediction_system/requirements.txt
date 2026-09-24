@@ -1,0 +1,14 @@
+onnxruntime==1.19.2
+scikit-learn
+joblib
+numpy
+pandas
+bleak
+PyQt5
+matplotlib
+tensorflow
+tf2onnx
+
+# For one-time model conversion only (not needed at runtime):
+# tensorflow>=2.15.0
+# tf2onnx>=1.16.0

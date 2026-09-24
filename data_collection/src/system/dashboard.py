@@ -27,7 +27,7 @@ class CalibrationDialog(QDialog):
         image_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
         "img",
-        "Position of Attention.jpg"
+        "PositionofAttention.jpg"
         )
         
         pixmap = QPixmap(image_path)
@@ -54,20 +54,7 @@ class CalibrationDialog(QDialog):
         self.timer.timeout.connect(self.update_timer)
         self.timer.start(1000)
         
-    def draw_stickman(self):
-        pixmap = QPixmap(200, 300)
-        pixmap.fill(Qt.transparent)
-        painter = QPainter(pixmap)
-        pen = QPen(QColor("#03dac6"), 8, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
-        painter.setPen(pen)
-        painter.drawEllipse(75, 20, 50, 50)
-        painter.drawLine(100, 70, 100, 180)
-        painter.drawLine(100, 80, 75, 160)
-        painter.drawLine(100, 80, 125, 160)
-        painter.drawLine(100, 180, 80, 280)
-        painter.drawLine(100, 180, 120, 280)
-        painter.end()
-        return pixmap
+    
 
     def update_timer(self):
         self.countdown -= 1
@@ -81,7 +68,7 @@ class RecordingDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Get Ready to Record")
-        self.setFixedSize(400, 200)
+        self.setFixedSize(400, 125)
         self.countdown = 5
         self.setStyleSheet("""
             QDialog { background-color: #1e1e1e; }
@@ -97,7 +84,7 @@ class RecordingDialog(QDialog):
         
         self.timer_label = QLabel(f"Recording starts in {self.countdown}...")
         self.timer_label.setAlignment(Qt.AlignCenter)
-        self.timer_label.setStyleSheet("font-size: 36px; color: #03dac6; font-weight: bold;")
+        self.timer_label.setStyleSheet("font-size: 20px; color: #03dac6; font-weight: bold;")
         layout.addWidget(self.timer_label)
         
         self.timer = QTimer(self)
@@ -149,11 +136,13 @@ class Dashboard(QMainWindow):
                 font-family: 'Segoe UI', Inter, sans-serif;
             }
             QGroupBox {
-                border: 1px solid #333333;
+                border: 2px solid #333333;
                 border-radius: 8px;
                 margin-top: 15px;
                 padding-top: 15px;
-                font-size: 16px;
+                padding-left: 10px;
+                padding-right: 10px;
+                font-size: 20px;
                 font-weight: bold;
                 background-color: #1e1e1e;
             }
@@ -216,12 +205,20 @@ class Dashboard(QMainWindow):
         """)
         self.video_label.setMinimumSize(640, 480)
         left_panel.addWidget(self.video_label, stretch=1)
-        
+
         # Controls Group
         controls_group = QGroupBox("System Controls")
+        controls_group_layout = QVBoxLayout()
         controls_layout = QHBoxLayout()
-        controls_layout.setContentsMargins(15, 20, 15, 15)
+        controls_layout.setContentsMargins(0, 15, 0, 15)
         controls_layout.setSpacing(15)
+
+        time_row = QHBoxLayout()
+        self.system_time_label = QLabel("System Time: --:--:--")
+        self.system_time_label.setAlignment(Qt.AlignCenter)
+        self.system_time_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #03dac6;")
+        time_row.addWidget(self.system_time_label)
+        time_row.setAlignment(Qt.AlignCenter)
         
         self.calib_btn = QPushButton("Calibrate All Sensors")
         self.calib_btn.setMinimumHeight(55)
@@ -252,26 +249,28 @@ class Dashboard(QMainWindow):
         self.record_btn.clicked.connect(self.toggle_recording)
         controls_layout.addWidget(self.record_btn)
         
-        controls_group.setLayout(controls_layout)
+        controls_group_layout.addLayout(time_row)
+        controls_group_layout.addLayout(controls_layout)        
+        controls_group.setLayout(controls_group_layout)
         left_panel.addWidget(controls_group)
         
         # Sync Status Group - Enhanced
-        sync_group = QGroupBox("Synchronization Monitor")
+        sync_group = QGroupBox("System information")
         sync_layout = QHBoxLayout()
         sync_layout.setContentsMargins(20, 20, 20, 20)
         
         self.sync_rate_label = QLabel("Sync Rate: 0 FPS")
-        self.sync_rate_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #03dac6;")
+        self.sync_rate_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #b3b3b3;")
         sync_layout.addWidget(self.sync_rate_label)
         
         self.active_nodes_label = QLabel("Active Nodes: 0/5")
-        self.active_nodes_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #03dac6;")
+        self.active_nodes_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #b3b3b3;")
         self.active_nodes_label.setAlignment(Qt.AlignCenter)
         sync_layout.addWidget(self.active_nodes_label)
         
         self.recording_status_label = QLabel("Status: IDLE")
         self.recording_status_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #b3b3b3;")
-        self.recording_status_label.setAlignment(Qt.AlignRight)
+        self.recording_status_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         sync_layout.addWidget(self.recording_status_label)
         
         sync_group.setLayout(sync_layout)
@@ -356,7 +355,7 @@ class Dashboard(QMainWindow):
                 self.recording_status_label.setText("Status: RECORDING (0)")
                 self.recording_status_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #cf6679;")
         else:
-            self.recorder.stop_recording()
+            save_result = self.recorder.stop_recording()
             self.record_btn.setText("Start Recording")
             self.record_btn.setStyleSheet("""
                 QPushButton { background-color: #2e7d32; font-size: 18px; }
@@ -366,7 +365,43 @@ class Dashboard(QMainWindow):
             self.recording_status_label.setText("Status: IDLE")
             self.recording_status_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #b3b3b3;")
 
+            if save_result:
+                message_box = QMessageBox(self)
+                message_box.setIcon(QMessageBox.Information)
+                message_box.setWindowTitle("Dataset Saved")
+                message_box.setText(
+                    f"Dataset saved:\n{os.path.basename(save_result['filepath'])}\n\n"
+                    f"Removed the last {save_result['trim_seconds']:.0f} seconds "
+                    f"({save_result['removed_rows']} records) to exclude unintended movement."
+                )
+                message_box.setStyleSheet("""
+                    QMessageBox {
+                        background-color: #1e1e1e;
+                    }
+                    QMessageBox QLabel {
+                        color: #ffffff;
+                        font-size: 14px;
+                        min-width: 420px;
+                    }
+                    QMessageBox QPushButton {
+                        background-color: #333333;
+                        color: #ffffff;
+                        border: 1px solid #555555;
+                        border-radius: 5px;
+                        padding: 7px 20px;
+                        min-width: 80px;
+                    }
+                    QMessageBox QPushButton:hover {
+                        background-color: #444444;
+                    }
+                """)
+                message_box.exec_()
+
     def update_ui(self):
+        self.system_time_label.setText(
+            f"System Time: {QTime.currentTime().toString('HH:mm:ss')}"
+        )
+
         # 1. Update Video Frame
         while not self.frame_queue.empty():
             frame = self.frame_queue.get()
