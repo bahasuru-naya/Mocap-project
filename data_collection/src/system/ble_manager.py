@@ -13,6 +13,7 @@ class BLEThread(threading.Thread):
         self.running = True
         self.clients = {}
         self.loop = None
+        self.connect_lock = None
         self.daemon = True
         self.CHARACTERISTIC_UUID_TX = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
         self.CHARACTERISTIC_UUID_RX = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
@@ -26,6 +27,8 @@ class BLEThread(threading.Thread):
             print(f"BLE Event Loop Error: {e}")
         
     async def main_task(self):
+        # Serialize scan/connect so one device reconnecting does not disturb the others' streams
+        self.connect_lock = asyncio.Lock()
         # Create connection task for each device
         tasks = [self.connect_to_device(name) for name in self.target_devices]
         
@@ -87,34 +90,44 @@ class BLEThread(threading.Thread):
 
     async def connect_to_device(self, device_name):
         while self.running:
-            self.status_queue.put({'device': device_name, 'status': 'scanning'})
-            device = await BleakScanner.find_device_by_filter(
-                lambda d, ad: d.name and d.name == device_name,
-                timeout=5.0
-            )
-            if device:
-                self.status_queue.put({'device': device_name, 'status': 'connecting'})
-                try:
-                    async with BleakClient(device) as client:
+            client = None
+            try:
+                async with self.connect_lock:
+                    self.status_queue.put({'device': device_name, 'status': 'scanning'})
+                    device = await BleakScanner.find_device_by_filter(
+                        lambda d, ad: d.name and d.name == device_name,
+                        timeout=5.0
+                    )
+                    if device:
+                        self.status_queue.put({'device': device_name, 'status': 'connecting'})
+                        client = BleakClient(device)
+                        await client.connect()
                         self.clients[device_name] = client
-                        self.status_queue.put({'device': device_name, 'status': 'connected'})
-                        
                         await client.start_notify(
-                            self.CHARACTERISTIC_UUID_TX, 
+                            self.CHARACTERISTIC_UUID_TX,
                             self.notification_handler(device_name)
                         )
-                        
-                        while client.is_connected and self.running:
-                            await asyncio.sleep(1.0)
-                            
-                except Exception as e:
-                    self.status_queue.put({'device': device_name, 'status': f'error'})
-            else:
-                self.status_queue.put({'device': device_name, 'status': 'not found'})
-                
+                        self.status_queue.put({'device': device_name, 'status': 'connected'})
+                    else:
+                        self.status_queue.put({'device': device_name, 'status': 'not found'})
+
+                # Stream outside the lock
+                if client:
+                    while client.is_connected and self.running:
+                        await asyncio.sleep(1.0)
+            except Exception as e:
+                print(f"BLE error {device_name}: {e}")
+                self.status_queue.put({'device': device_name, 'status': 'error'})
+            finally:
+                self.clients.pop(device_name, None)
+                if client:
+                    try:
+                        await client.disconnect()
+                    except Exception:
+                        pass
+
             if self.running:
-                # Wait before attempting reconnect
                 await asyncio.sleep(2.0)
-                
+
     def stop(self):
         self.running = False

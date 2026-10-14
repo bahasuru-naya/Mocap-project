@@ -1,14 +1,15 @@
 import cv2
 import mediapipe as mp
 import time
-import threading
+import queue
+import multiprocessing as mp_proc
 
-class CVThread(threading.Thread):
+class CVProcess(mp_proc.Process):
     def __init__(self, frame_queue, cv_data_queue):
         super().__init__()
         self.frame_queue = frame_queue
         self.cv_data_queue = cv_data_queue
-        self.running = True
+        self.stop_event = mp_proc.Event()
         self.daemon = True
         
     def run(self):
@@ -25,7 +26,7 @@ class CVThread(threading.Thread):
         allowed_body_indices = list(range(11, 17)) + list(range(23, 33))
         allowed_set = set(allowed_body_indices)
         
-        while self.running and cap.isOpened():
+        while not self.stop_event.is_set() and cap.isOpened():
             success, image = cap.read()
             if not success:
                 time.sleep(0.01)
@@ -85,22 +86,26 @@ class CVThread(threading.Thread):
             
             # Put image frame in queue for Dashboard (convert back to RGB for PyQt)
             img_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            if self.frame_queue.full():
+            try:
+                self.frame_queue.put_nowait(img_rgb)
+            except queue.Full:
                 try:
-                    self.frame_queue.get_nowait() # drop oldest to prevent lag
-                except:
+                    self.frame_queue.get_nowait()  # drop oldest to prevent lag
+                    self.frame_queue.put_nowait(img_rgb)
+                except (queue.Empty, queue.Full):
                     pass
-            self.frame_queue.put(img_rgb)
-            
+
             # Put pose data in queue for Synchronization
             if lm_list:
-                if not self.cv_data_queue.full():
-                    self.cv_data_queue.put({
+                try:
+                    self.cv_data_queue.put_nowait({
                         'sys_time': frame_time,
                         'pose': lm_list
                     })
-                
+                except queue.Full:
+                    pass
+
         cap.release()
 
     def stop(self):
-        self.running = False
+        self.stop_event.set()

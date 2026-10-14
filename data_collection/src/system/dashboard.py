@@ -402,16 +402,17 @@ class Dashboard(QMainWindow):
             f"System Time: {QTime.currentTime().toString('HH:mm:ss')}"
         )
 
-        # 1. Update Video Frame
+        # 1. Update Video Frame (render only the newest frame)
+        frame = None
         while not self.frame_queue.empty():
             frame = self.frame_queue.get()
+        if frame is not None:
             h, w, ch = frame.shape
-            bytes_per_line = ch * w
-            qt_image = QImage(frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
+            qt_image = QImage(frame.data, w, h, ch * w, QImage.Format_RGB888)
             pixmap = QPixmap.fromImage(qt_image)
-            pixmap = pixmap.scaled(self.video_label.width(), self.video_label.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            pixmap = pixmap.scaled(self.video_label.width(), self.video_label.height(), Qt.KeepAspectRatio, Qt.FastTransformation)
             self.video_label.setPixmap(pixmap)
-            
+
         # 2. Update BLE Status
         active_count = 0
         while not self.ble_status_queue.empty():
@@ -446,25 +447,35 @@ class Dashboard(QMainWindow):
                 active_count += 1
         self.active_nodes_label.setText(f"Active Nodes: {active_count}/5")
 
-        # 3. Update Sync Data
+        # 3. Update Sync Data (count every frame, render only the newest)
+        latest = None
         while not self.sync_queue.empty():
-            synced_frame = self.sync_queue.get()
+            latest = self.sync_queue.get()
             self.frames_received += 1
             if self.recorder.recording:
                 self.total_frames_recorded += 1
-                self.recording_status_label.setText(f"Status: RECORDING ({self.total_frames_recorded} frames)")
-            
+        if self.recorder.recording:
+            self.recording_status_label.setText(f"Status: RECORDING ({self.total_frames_recorded} frames)")
+
+        if latest is not None:
+            if not hasattr(self, '_data_state'):
+                self._data_state = {}
+            ok_style = "font-size: 13px; font-family: 'Consolas', monospace; color: #03dac6;"
+            bad_style = "font-size: 13px; font-family: 'Consolas', monospace; color: #cf6679;"
             for dev in self.target_devices:
-                imu = synced_frame['imus'].get(dev)
+                imu = latest['imus'].get(dev)
+                lbl = self.status_labels[dev]['data']
                 if imu:
-                    text = f"A: {imu['ax']:>5.2f}, {imu['ay']:>5.2f}, {imu['az']:>5.2f}\n" \
-                           f"G: {imu['gx']:>5.2f}, {imu['gy']:>5.2f}, {imu['gz']:>5.2f}"
-                    self.status_labels[dev]['data'].setText(text)
-                    self.status_labels[dev]['data'].setStyleSheet("font-size: 13px; font-family: 'Consolas', monospace; color: #03dac6;")
+                    lbl.setText(f"A: {imu['ax']:>5.2f}, {imu['ay']:>5.2f}, {imu['az']:>5.2f}\n"
+                                f"G: {imu['gx']:>5.2f}, {imu['gy']:>5.2f}, {imu['gz']:>5.2f}")
+                    state = True
                 else:
-                    self.status_labels[dev]['data'].setText("Data: MISSING")
-                    self.status_labels[dev]['data'].setStyleSheet("font-size: 13px; font-family: 'Consolas', monospace; color: #cf6679;")
-                    
+                    lbl.setText("Data: MISSING")
+                    state = False
+                if self._data_state.get(dev) != state:
+                    lbl.setStyleSheet(ok_style if state else bad_style)
+                    self._data_state[dev] = state
+
         # 4. Calculate Sync FPS
         current_time = QDateTime.currentMSecsSinceEpoch()
         if current_time - self.last_fps_time >= 1000:

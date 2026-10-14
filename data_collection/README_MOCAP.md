@@ -35,7 +35,7 @@ python src/app_main.py
 - **Calibration:** Before starting a recording, place all IMUs flat and stationary, and click "Calibrate All Sensors". Wait for the status indicator on each node to turn Blue ("CALIBRATED"). This will cancel out gyroscope drift and zero out the accelerometer offset.
 - **Recording:** Enter a session name and click "Start Recording".
 - **Synchronization Monitor:** Ensure the "Sync Rate" is stable (usually between 20-30 FPS).
-- **Data Output:** Recorded datasets are saved in the `recordings/` folder as `.csv` files. Each row contains the synchronized system timestamp, all 17 extracted MediaPipe world landmarks, and the accelerometer/gyroscope readings for all 5 IMU nodes.
+- **Data Output:** Recorded datasets are saved in the `recordings/` folder as `.csv` files. When recording stops, rows are resampled to a fixed 20 Hz timeline; numeric pose and sensor values are linearly interpolated between synchronized frames. Live sensor matching continues to use the original capture timestamps.
 
 ## Architecture
 

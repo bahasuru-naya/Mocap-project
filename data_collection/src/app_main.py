@@ -1,9 +1,10 @@
 import sys
 import queue
+import multiprocessing as mp
 from PyQt5.QtWidgets import QApplication
 from system.dashboard import Dashboard
 from system.ble_manager import BLEThread
-from system.cv_module import CVThread
+from system.cv_module import CVProcess
 from system.sync_engine import SyncEngine
 from system.dataset_recorder import DatasetRecorder
 
@@ -17,8 +18,9 @@ def main():
     ble_status_queue = queue.Queue()
     ble_cmd_queue = queue.Queue()
     
-    cv_frame_queue = queue.Queue(maxsize=10)
-    cv_data_queue = queue.Queue(maxsize=100)
+    # Cross-process queues (CV runs in its own process)
+    cv_frame_queue = mp.Queue(maxsize=10)
+    cv_data_queue = mp.Queue(maxsize=100)
     
     sync_queue = queue.Queue(maxsize=100)
 
@@ -28,13 +30,13 @@ def main():
 
     # Initialize Threads
     ble_thread = BLEThread(TARGET_DEVICES, ble_data_queue, ble_status_queue, ble_cmd_queue)
-    cv_thread = CVThread(cv_frame_queue, cv_data_queue)
+    cv_process = CVProcess(cv_frame_queue, cv_data_queue)
     sync_thread = SyncEngine(ble_data_queue, cv_data_queue, sync_queue, TARGET_DEVICES, recorder)
 
     # Start Threads
     print("Starting background threads...")
     ble_thread.start()
-    cv_thread.start()
+    cv_process.start()
     sync_thread.start()
 
     # Start UI
@@ -50,17 +52,20 @@ def main():
     # Clean shutdown
     print("Shutting down cleanly... Disconnecting BLE devices (this may take a few seconds)...")
     ble_thread.stop()
-    cv_thread.stop()
+    cv_process.stop()
     sync_thread.stop()
     recorder.stop_recording()
     
     # Crucial: Wait for the BLE thread to process the stop command and cleanly disconnect.
     # Without this, Windows BLE stack keeps the connections open, causing errors on next launch.
     ble_thread.join(timeout=5.0)
-    cv_thread.join(timeout=2.0)
+    cv_process.join(timeout=3.0)
+    if cv_process.is_alive():
+        cv_process.terminate()
     sync_thread.join(timeout=2.0)
     
     sys.exit(exit_code)
 
 if __name__ == "__main__":
+    mp.freeze_support()  # needed on Windows
     main()

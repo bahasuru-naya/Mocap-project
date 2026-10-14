@@ -3,7 +3,7 @@ AI MoCap — Realtime Motion Prediction System
 =============================================
 
 Entry point that wires together BLE sensor streaming, time-synchronisation,
-GPU-accelerated pose inference, and 3-D skeleton visualisation.
+ensemble pose inference (3 models averaged), and 3-D skeleton visualisation.
 
 Usage
 -----
@@ -27,17 +27,32 @@ def main():
     # ------------------------------------------------------------------ #
     #  Configuration
     # ------------------------------------------------------------------ #
-    # Target BLE device names — firmware on each ESP32 must match one.
     TARGET_DEVICES = [
         "ESP32_IMU_1", "ESP32_IMU_2", "ESP32_IMU_3",
         "ESP32_IMU_4", "ESP32_IMU_5",
     ]
 
-    # Model & scaler paths (relative to prediction_system/)
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    MODEL_PATH       = os.path.join(BASE_DIR, "model",   "best_model_overall.onnx")
+
+    # The ensemble: 3 ONNX models (one per training seed), averaged at inference.
+    # Inference device. Tiny models often run as fast (or faster) on CPU than on a GPU
+    # because of host<->GPU copies. Flip this and compare the FPS / latency on the dashboard.
+    PREFER_GPU = False
+
+    N_MODELS = 3
+    MODEL_PATHS = [
+        os.path.join(BASE_DIR, "model", f"best_model_overall_member{i}.onnx")
+        for i in range(N_MODELS)
+    ]
     IMU_SCALER_PATH  = os.path.join(BASE_DIR, "scalers", "imu_scaler.joblib")
     POSE_SCALER_PATH = os.path.join(BASE_DIR, "scalers", "pose_scaler.joblib")
+
+    missing = [p for p in MODEL_PATHS + [IMU_SCALER_PATH, POSE_SCALER_PATH] if not os.path.exists(p)]
+    if missing:
+        print("[ERROR] Missing file(s):")
+        for p in missing:
+            print("   ", p)
+        sys.exit(1)
 
     # ------------------------------------------------------------------ #
     #  Thread-safe queues
@@ -55,23 +70,21 @@ def main():
     print("  AI MoCap — Realtime Motion Prediction System")
     print("=" * 60)
 
-    # 1) BLE sensor data streaming
     print("\n[Main] Starting BLE thread...")
     ble_thread = BLEThread(
         TARGET_DEVICES, ble_data_queue, ble_status_queue, ble_cmd_queue
     )
 
-    # 2) IMU stream synchronisation
     print("[Main] Starting sync engine...")
     sync_engine = SyncEngine(
         ble_data_queue, sync_queue, TARGET_DEVICES
     )
 
-    # 3) GPU-accelerated pose prediction
-    print("[Main] Starting prediction engine (loading model + CUDA)...")
+    print(f"[Main] Starting prediction engine (loading {N_MODELS} models)...")
     prediction_engine = PredictionEngine(
         sync_queue, pose_queue,
-        MODEL_PATH, IMU_SCALER_PATH, POSE_SCALER_PATH,
+        MODEL_PATHS, IMU_SCALER_PATH, POSE_SCALER_PATH,
+        prefer_gpu=PREFER_GPU,
     )
 
     # ------------------------------------------------------------------ #

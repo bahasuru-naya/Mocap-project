@@ -2,6 +2,7 @@ import threading
 import time
 from collections import deque
 
+
 class SyncEngine(threading.Thread):
     def __init__(self, ble_data_queue, cv_data_queue, sync_queue, target_devices, recorder):
         super().__init__()
@@ -10,81 +11,104 @@ class SyncEngine(threading.Thread):
         self.sync_queue = sync_queue
         self.target_devices = target_devices
         self.recorder = recorder
-        
+
         self.running = True
         self.daemon = True
-        
-        # Buffers to store data within a short sliding window
-        self.imu_buffers = {dev: deque(maxlen=200) for dev in self.target_devices}
-        self.cv_buffer = deque(maxlen=50)
-        
-        # Tolerance window (in seconds). 0.05s = 50ms (allows syncing 20-30Hz sources)
-        self.sync_tolerance = 0.05 
-        
+
+        self.imu_buffers = {dev: deque(maxlen=300) for dev in self.target_devices}
+        self.cv_buffer = deque(maxlen=100)
+
+        # Per-device clock mapping: node millis() -> PC time
+        # offset = min(arrival_time - node_time) over a sliding window.
+        # The minimum picks the least-delayed packets, which removes BLE batching jitter.
+        self.offset_windows = {dev: deque(maxlen=500) for dev in self.target_devices}
+        self.offsets = {dev: None for dev in self.target_devices}
+        self.last_node_t = {dev: None for dev in self.target_devices}
+        self.last_arrival = {dev: 0.0 for dev in self.target_devices}
+
+        self.sync_tolerance = 0.06   # ideal match window (s)
+        self.max_hold = 0.15         # accept nearest sample up to this far away (s)
+        self.max_wait = 0.25         # max time a CV frame waits for late BLE data (s)
+        self.dead_after = 0.3        # device silent this long = treat as absent, never wait for it (s)
+        self.time_shift = 0.0        # tune if IMU consistently lags/leads video (s)
+
+    def _ingest_imu(self, data):
+        dev = data['node_id']
+        if dev not in self.imu_buffers:
+            return
+        node_t = data['node_time'] / 1000.0
+        last = self.last_node_t[dev]
+        if last is not None and node_t < last - 1.0:
+            # node rebooted, millis() restarted
+            self.imu_buffers[dev].clear()
+            self.offset_windows[dev].clear()
+        self.last_node_t[dev] = node_t
+
+        win = self.offset_windows[dev]
+        win.append(data['sys_time'] - node_t)
+        self.offsets[dev] = min(win)
+        self.last_arrival[dev] = time.time()
+
+        data['node_t'] = node_t
+        self.imu_buffers[dev].append(data)
+
+    def _ts(self, dev, sample):
+        return sample['node_t'] + self.offsets[dev] + self.time_shift
+
     def run(self):
         while self.running:
-            # Empty the queues into buffers
             while not self.ble_data_queue.empty():
-                data = self.ble_data_queue.get()
-                node_id = data['node_id']
-                if node_id in self.imu_buffers:
-                    self.imu_buffers[node_id].append(data)
-                    
+                self._ingest_imu(self.ble_data_queue.get())
+
             while not self.cv_data_queue.empty():
                 self.cv_buffer.append(self.cv_data_queue.get())
-                
-            # Attempt synchronization based on the oldest CV frame
+
+            now = time.time()
             while len(self.cv_buffer) > 0:
                 cv_data = self.cv_buffer[0]
                 target_time = cv_data['sys_time']
-                
+                age = now - target_time
+
                 synced_frame = {'sys_time': target_time, 'cv': cv_data['pose'], 'imus': {}}
-                
                 all_ready = True
-                
+
                 for dev in self.target_devices:
                     buffer = self.imu_buffers[dev]
-                    
-                    closest_sample = None
-                    min_diff = float('inf')
-                    
-                    # Find IMU sample closest to CV frame timestamp
+                    alive = (now - self.last_arrival[dev]) < self.dead_after
+
+                    closest, min_diff, newest_ts = None, float('inf'), None
                     for sample in buffer:
-                        diff = abs(sample['sys_time'] - target_time)
+                        ts = self._ts(dev, sample)
+                        newest_ts = ts if newest_ts is None or ts > newest_ts else newest_ts
+                        diff = abs(ts - target_time)
                         if diff < min_diff:
-                            min_diff = diff
-                            closest_sample = sample
-                            
-                    if closest_sample and min_diff <= self.sync_tolerance:
-                        synced_frame['imus'][dev] = closest_sample
+                            min_diff, closest = diff, sample
+
+                    if closest is not None and min_diff <= self.sync_tolerance:
+                        synced_frame['imus'][dev] = closest
+                        continue
+
+                    # Data for this timestamp may still be in flight
+                    still_coming = alive and (newest_ts is None or newest_ts < target_time + self.sync_tolerance)
+                    if still_coming and age < self.max_wait:
+                        all_ready = False
+                        break
+
+                    # Give up waiting: hold nearest sample if reasonably close, else missing
+                    if closest is not None and min_diff <= self.max_hold:
+                        synced_frame['imus'][dev] = closest
                     else:
-                        # Decide how to handle missing data
-                        if len(buffer) > 0 and buffer[-1]['sys_time'] > target_time + self.sync_tolerance:
-                            # We missed it completely, accept as missing
-                            synced_frame['imus'][dev] = None
-                        elif time.time() - target_time > 0.5:
-                            # This CV frame is getting too old, give up waiting and mark IMU as missing
-                            synced_frame['imus'][dev] = None
-                        else:
-                            # We might still get data for this timestamp. Wait.
-                            all_ready = False
-                            break
-                            
+                        synced_frame['imus'][dev] = None
+
                 if all_ready:
-                    # Pop the CV frame as it has been processed
                     self.cv_buffer.popleft()
-                    
-                    # Put to sync queue for UI
                     if not self.sync_queue.full():
                         self.sync_queue.put(synced_frame)
-                        
-                    # Send to recorder
                     self.recorder.record_frame(synced_frame)
                 else:
-                    break # Wait for more data
-                    
-            # Prevent 100% CPU usage
+                    break
+
             time.sleep(0.005)
-            
+
     def stop(self):
         self.running = False

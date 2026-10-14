@@ -52,7 +52,7 @@ class DatasetRecorder:
             rows = list(csv.reader(source))
 
         header = rows[:1]
-        data_rows = rows[1:]
+        data_rows = self._resample_rows(header[0], rows[1:])
         removed_rows = 0
 
         if data_rows:
@@ -79,13 +79,55 @@ class DatasetRecorder:
             'remaining_rows': len(kept_rows),
             'trim_seconds': self.trim_seconds,
         }
+
+    @staticmethod
+    def _resample_rows(header, rows, rate_hz=20):
+        if len(rows) < 2:
+            return rows
+
+        interval = 1.0 / rate_hz
+        start_time = float(rows[0][0])
+        output_rows = [rows[0]]
+        frame_index = 1
+
+        for left, right in zip(rows, rows[1:]):
+            left_time = float(left[0])
+            right_time = float(right[0])
+            if right_time <= left_time:
+                continue
+
+            while start_time + frame_index * interval <= right_time:
+                target_time = start_time + frame_index * interval
+                ratio = (target_time - left_time) / (right_time - left_time)
+                row = [
+                    repr(float(target_time)),
+                    datetime.fromtimestamp(target_time).strftime('%Y-%m-%d %H:%M:%S.%f'),
+                ]
+
+                for column_index in range(2, len(header)):
+                    left_value = left[column_index]
+                    right_value = right[column_index]
+                    if left_value and right_value:
+                        value = float(left_value) + (
+                            float(right_value) - float(left_value)
+                        ) * ratio
+                        row.append(repr(value))
+                    elif left_value or right_value:
+                        row.append(left_value or right_value)
+                    else:
+                        row.append('')
+
+                output_rows.append(row)
+                frame_index += 1
+
+        return output_rows
             
     def record_frame(self, synced_frame):
         if not self.recording or not self.writer:
             return
             
         system_time = synced_frame['sys_time']
-        row = [system_time, datetime.fromtimestamp(system_time).strftime('%Y-%m-%d %H:%M:%S.%f')]
+        row = [repr(float(system_time)), datetime.fromtimestamp(system_time).strftime('%Y-%m-%d %H:%M:%S.%f')]
         
         # Add CV data
         for pt in synced_frame['cv']:
