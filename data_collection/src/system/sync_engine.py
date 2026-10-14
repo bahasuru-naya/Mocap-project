@@ -26,8 +26,8 @@ class SyncEngine(threading.Thread):
         self.last_node_t = {dev: None for dev in self.target_devices}
         self.last_arrival = {dev: 0.0 for dev in self.target_devices}
 
-        self.sync_tolerance = 0.06   # ideal match window (s)
-        self.max_hold = 0.15         # accept nearest sample up to this far away (s)
+        self.sync_tolerance = 0.04   # ideal match window (s)
+        self.max_hold = 0.05         # accept nearest sample up to this far away (s)
         self.max_wait = 0.25         # max time a CV frame waits for late BLE data (s)
         self.dead_after = 0.3        # device silent this long = treat as absent, never wait for it (s)
         self.time_shift = 0.0        # tune if IMU consistently lags/leads video (s)
