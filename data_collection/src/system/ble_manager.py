@@ -1,4 +1,5 @@
 import asyncio
+import queue
 import threading
 import time
 from bleak import BleakClient, BleakScanner
@@ -15,6 +16,9 @@ class BLEThread(threading.Thread):
         self.loop = None
         self.connect_lock = None
         self.daemon = True
+        self.data_timeout = 1.0
+        self.last_data_at = {}
+        self.calibration_grace_until = {}
         self.CHARACTERISTIC_UUID_TX = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
         self.CHARACTERISTIC_UUID_RX = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
         
@@ -53,6 +57,7 @@ class BLEThread(threading.Thread):
                                 # Use response=False to prevent the PC from waiting for an ACK.
                                 # This avoids the "Unreachable" errors caused by the BLE channel being busy.
                                 await client.write_gatt_char(self.CHARACTERISTIC_UUID_RX, b"CALIBRATE", response=False)
+                                self.calibration_grace_until[device_name] = time.monotonic() + 3.0
                                 print(f"Successfully sent CALIBRATE to {device_name}")
                                 break # Exit retry loop on success
                             except Exception as e:
@@ -69,6 +74,8 @@ class BLEThread(threading.Thread):
             try:
                 line = data.decode('utf-8').strip()
                 if line == "CALIB_DONE":
+                    self.last_data_at[device_name] = time.monotonic()
+                    self.calibration_grace_until.pop(device_name, None)
                     self.status_queue.put({'device': device_name, 'status': 'calibrated'})
                     return
                     
@@ -81,11 +88,13 @@ class BLEThread(threading.Thread):
                         'ax': float(values[1]), 'ay': float(values[2]), 'az': float(values[3]),
                         'gx': float(values[4]), 'gy': float(values[5]), 'gz': float(values[6])
                     }
-                    if not self.data_queue.full():
-                        self.data_queue.put(sensor_data)
+                    self.last_data_at[device_name] = time.monotonic()
+                    try:
+                        self.data_queue.put_nowait(sensor_data)
+                    except queue.Full:
+                        print(f"BLE data queue full; dropped packet from {device_name}")
             except Exception as e:
-                # ignore malformed packets
-                pass
+                print(f"Invalid BLE packet from {device_name}: {e}")
         return handler
 
     async def connect_to_device(self, device_name):
@@ -107,6 +116,7 @@ class BLEThread(threading.Thread):
                             self.CHARACTERISTIC_UUID_TX,
                             self.notification_handler(device_name)
                         )
+                        self.last_data_at[device_name] = time.monotonic()
                         self.status_queue.put({'device': device_name, 'status': 'connected'})
                     else:
                         self.status_queue.put({'device': device_name, 'status': 'not found'})
@@ -114,12 +124,21 @@ class BLEThread(threading.Thread):
                 # Stream outside the lock
                 if client:
                     while client.is_connected and self.running:
-                        await asyncio.sleep(1.0)
+                        now = time.monotonic()
+                        grace_until = self.calibration_grace_until.get(device_name, 0.0)
+                        last_data = self.last_data_at.get(device_name, now)
+                        if now >= grace_until and now - last_data > self.data_timeout:
+                            print(f"No IMU data from {device_name} for {self.data_timeout:.1f}s; reconnecting")
+                            self.status_queue.put({'device': device_name, 'status': 'error'})
+                            break
+                        await asyncio.sleep(0.1)
             except Exception as e:
                 print(f"BLE error {device_name}: {e}")
                 self.status_queue.put({'device': device_name, 'status': 'error'})
             finally:
                 self.clients.pop(device_name, None)
+                self.last_data_at.pop(device_name, None)
+                self.calibration_grace_until.pop(device_name, None)
                 if client:
                     try:
                         await client.disconnect()
