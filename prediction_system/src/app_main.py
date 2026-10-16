@@ -14,8 +14,11 @@ Usage
 import sys
 import os
 import queue
+from pathlib import Path
 
 from PyQt5.QtWidgets import QApplication
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from system.ble_manager import BLEThread
 from system.sync_engine import SyncEngine

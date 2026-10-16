@@ -110,14 +110,18 @@ class Dashboard(QMainWindow):
         self.target_devices = target_devices
         self.device_status = {dev: "disconnected" for dev in target_devices}
         
-        self.total_frames_recorded = 0
         
+        # Debounce: only show "MISSING" after N consecutive misses (prevents flicker)
+        self._consecutive_misses = {dev: 0 for dev in target_devices}
+        self._MISS_THRESHOLD = 3  # frames before showing MISSING
+
         self.initUI()
         
         # Timer to poll queues and update UI without blocking
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_ui)
         self.timer.start(30) # ~33 FPS
+        self.recording_elapsed_timer = QElapsedTimer()
         
         self.frames_received = 0
         self.last_fps_time = QDateTime.currentMSecsSinceEpoch()
@@ -259,7 +263,7 @@ class Dashboard(QMainWindow):
         sync_layout = QHBoxLayout()
         sync_layout.setContentsMargins(20, 20, 20, 20)
         
-        self.sync_rate_label = QLabel("Sync Rate: 0 FPS")
+        self.sync_rate_label = QLabel("Live Readout Rate: 0 FPS")
         self.sync_rate_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #b3b3b3;")
         sync_layout.addWidget(self.sync_rate_label)
         
@@ -344,18 +348,49 @@ class Dashboard(QMainWindow):
             dialog = RecordingDialog(self)
             if dialog.exec_() == QDialog.Accepted:
                 name = self.session_input.text().strip() or "mocap_session"
-                self.recorder.start_recording(name)
-                self.total_frames_recorded = 0
+                try:
+                    self.recorder.start_recording(name)
+                except RuntimeError as error:
+                    message_box = QMessageBox(self)
+                    message_box.setIcon(QMessageBox.Warning)
+                    message_box.setWindowTitle("Clock Sync Not Ready")
+                    message_box.setText(str(error))
+                    message_box.setStandardButtons(QMessageBox.Ok)
+                    message_box.setStyleSheet("""
+                        QMessageBox {
+                            background-color: #1e1e1e;
+                        }
+                        QMessageBox QLabel {
+                            color: #ffffff;
+                            font-size: 14px;
+                            min-width: 420px;
+                        }
+                        QMessageBox QPushButton {
+                            background-color: #333333;
+                            color: #ffffff;
+                            border: 1px solid #555555;
+                            border-radius: 5px;
+                            padding: 7px 20px;
+                            min-width: 80px;
+                        }
+                        QMessageBox QPushButton:hover {
+                            background-color: #444444;
+                        }
+                    """)
+                    message_box.exec_()
+                    return
                 self.record_btn.setText("Stop Recording")
                 self.record_btn.setStyleSheet("""
                     QPushButton { background-color: #c62828; font-size: 18px; }
                     QPushButton:hover { background-color: #e53935; }
                 """)
                 self.session_input.setEnabled(False)
-                self.recording_status_label.setText("Status: RECORDING (0)")
+                self.recording_elapsed_timer.start()
+                self.recording_status_label.setText("Status: RECORDING | Elapsed: 00:00:00")
                 self.recording_status_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #cf6679;")
         else:
             save_result = self.recorder.stop_recording()
+            self.recording_elapsed_timer.invalidate()
             self.record_btn.setText("Start Recording")
             self.record_btn.setStyleSheet("""
                 QPushButton { background-color: #2e7d32; font-size: 18px; }
@@ -366,13 +401,41 @@ class Dashboard(QMainWindow):
             self.recording_status_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #b3b3b3;")
 
             if save_result:
+                missing_data = save_result['missing_data']
+                imu_missing_lines = [
+                    f"{device}: {stats['percentage']:.2f}% "
+                    f"({stats['missing']}/{stats['total']} samples)"
+                    if stats['percentage'] is not None
+                    else f"{device}: N/A (no samples)"
+                    for device, stats in missing_data['imu'].items()
+                ]
+                cv_stats = missing_data['cv']
+                cv_missing_line = (
+                    f"CV landmarks: {cv_stats['percentage']:.2f}% "
+                    f"({cv_stats['missing']}/{cv_stats['total']} landmarks)"
+                    if cv_stats['percentage'] is not None
+                    else "CV landmarks: N/A (no samples)"
+                )
+                clock_sync_lines = [
+                    f"{device}: offset {stats['offset_seconds']:.6f} s "
+                    f"({stats['pre_record_samples']} pre-record samples)"
+                    for device, stats in save_result['clock_sync'].items()
+                ]
+                clock_sync_summary = "\n".join(clock_sync_lines)
+                missing_summary = "\n".join(
+                    imu_missing_lines + [cv_missing_line]
+                )
                 message_box = QMessageBox(self)
                 message_box.setIcon(QMessageBox.Information)
                 message_box.setWindowTitle("Dataset Saved")
                 message_box.setText(
                     f"Dataset saved:\n{os.path.basename(save_result['filepath'])}\n\n"
+                    f"Pre-recording clock sync:\n"
+                    f"{clock_sync_summary}\n\n"
                     f"Removed the last {save_result['trim_seconds']:.0f} seconds "
-                    f"({save_result['removed_rows']} records) to exclude unintended movement."
+                    f"({save_result['removed_rows']} records) to exclude unintended movement.\n\n"
+                    f"Missing data in saved dataset:\n"
+                    f"{missing_summary}"
                 )
                 message_box.setStyleSheet("""
                     QMessageBox {
@@ -447,39 +510,54 @@ class Dashboard(QMainWindow):
                 active_count += 1
         self.active_nodes_label.setText(f"Active Nodes: {active_count}/5")
 
-        # 3. Update Sync Data (count every frame, render only the newest)
+        # 3. Update the latest raw telemetry (not synchronized recording frames)
         latest = None
         while not self.sync_queue.empty():
             latest = self.sync_queue.get()
             self.frames_received += 1
-            if self.recorder.recording:
-                self.total_frames_recorded += 1
         if self.recorder.recording:
-            self.recording_status_label.setText(f"Status: RECORDING ({self.total_frames_recorded} frames)")
+            elapsed_seconds = self.recording_elapsed_timer.elapsed() // 1000
+            hours, remainder = divmod(elapsed_seconds, 3600)
+            minutes, seconds = divmod(remainder, 60)
+            self.recording_status_label.setText(
+                f"Status: RECORDING | Elapsed: {hours:02}:{minutes:02}:{seconds:02}"
+            )
 
         if latest is not None:
             if not hasattr(self, '_data_state'):
                 self._data_state = {}
             ok_style = "font-size: 13px; font-family: 'Consolas', monospace; color: #03dac6;"
             bad_style = "font-size: 13px; font-family: 'Consolas', monospace; color: #cf6679;"
+            held_style = "font-size: 13px; font-family: 'Consolas', monospace; color: #ffa000;"
             for dev in self.target_devices:
                 imu = latest['imus'].get(dev)
                 lbl = self.status_labels[dev]['data']
                 if imu:
+                    self._consecutive_misses[dev] = 0
                     lbl.setText(f"A: {imu['ax']:>5.2f}, {imu['ay']:>5.2f}, {imu['az']:>5.2f}\n"
                                 f"G: {imu['gx']:>5.2f}, {imu['gy']:>5.2f}, {imu['gz']:>5.2f}")
-                    state = True
+                    state = 'ok'
                 else:
-                    lbl.setText("Data: MISSING")
-                    state = False
+                    self._consecutive_misses[dev] += 1
+                    if self._consecutive_misses[dev] >= self._MISS_THRESHOLD:
+                        lbl.setText("Data: MISSING")
+                        state = 'bad'
+                    else:
+                        # Don't change the label text — keep showing last good data
+                        state = 'held'
                 if self._data_state.get(dev) != state:
-                    lbl.setStyleSheet(ok_style if state else bad_style)
+                    if state == 'ok':
+                        lbl.setStyleSheet(ok_style)
+                    elif state == 'held':
+                        lbl.setStyleSheet(held_style)
+                    else:
+                        lbl.setStyleSheet(bad_style)
                     self._data_state[dev] = state
 
-        # 4. Calculate Sync FPS
+        # 4. Calculate live telemetry update rate
         current_time = QDateTime.currentMSecsSinceEpoch()
         if current_time - self.last_fps_time >= 1000:
             fps = self.frames_received
-            self.sync_rate_label.setText(f"Sync Rate: {fps} FPS")
+            self.sync_rate_label.setText(f"Live Readout Rate: {fps} FPS")
             self.frames_received = 0
             self.last_fps_time = current_time

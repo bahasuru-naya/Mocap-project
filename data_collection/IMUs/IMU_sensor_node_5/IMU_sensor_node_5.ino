@@ -4,6 +4,9 @@
 #include <BLEUtils.h>
 #include <BLE2902.h>
 #include <DFRobot_BMI160.h>
+#include <math.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 DFRobot_BMI160 bmi160;
 const int8_t i2c_addr = 0x68;
@@ -11,6 +14,7 @@ const int8_t i2c_addr = 0x68;
 BLEServer* pServer = NULL;
 BLECharacteristic* pTxCharacteristic = NULL;
 bool deviceConnected = false;
+SemaphoreHandle_t notificationMutex = NULL;
 
 // CHANGE THIS BEFORE UPLOADING TO EACH SENSOR (e.g., ESP32_IMU_1, ESP32_IMU_2, ...)
 #define NODE_ID "ESP32_IMU_5" 
@@ -18,6 +22,7 @@ bool deviceConnected = false;
 #define SERVICE_UUID            "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
 #define CHARACTERISTIC_UUID_TX  "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
 #define CHARACTERISTIC_UUID_RX  "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
+uint16_t sample_sequence = 0;
 
 // Calibration offsets
 float gx_offset = 0, gy_offset = 0, gz_offset = 0;
@@ -35,6 +40,33 @@ volatile bool read_data = false;
 // The Interrupt Service Routine (ISR)
 void IRAM_ATTR onTimer() {
   read_data = true;
+}
+
+void writeUint16LE(uint8_t* buffer, size_t offset, uint16_t value) {
+  buffer[offset] = value & 0xFF;
+  buffer[offset + 1] = (value >> 8) & 0xFF;
+}
+
+void writeUint32LE(uint8_t* buffer, size_t offset, uint32_t value) {
+  buffer[offset] = value & 0xFF;
+  buffer[offset + 1] = (value >> 8) & 0xFF;
+  buffer[offset + 2] = (value >> 16) & 0xFF;
+  buffer[offset + 3] = (value >> 24) & 0xFF;
+}
+
+void writeInt16LE(uint8_t* buffer, size_t offset, int16_t value) {
+  writeUint16LE(buffer, offset, static_cast<uint16_t>(value));
+}
+
+void notifyPacket(const uint8_t* packet, size_t length) {
+  if (notificationMutex) {
+    xSemaphoreTake(notificationMutex, portMAX_DELAY);
+  }
+  pTxCharacteristic->setValue(packet, length);
+  pTxCharacteristic->notify();
+  if (notificationMutex) {
+    xSemaphoreGive(notificationMutex);
+  }
 }
 
 class MyServerCallbacks : public BLEServerCallbacks {
@@ -71,6 +103,7 @@ class MyCallbacks : public BLECharacteristicCallbacks {
 void setup() {
   Serial.begin(115200);
   delay(100);
+  notificationMutex = xSemaphoreCreateMutex();
 
   Wire.begin();
   Wire.setClock(400000); // 400kHz I2C for fast reading
@@ -140,7 +173,7 @@ void loop() {
 
       if (is_calibrating) {
         sum_gx += gx; sum_gy += gy; sum_gz += gz;
-        sum_ax += ax; sum_ay += ay; sum_az += (az - 1.0); // Assuming sensor is flat on table, Z should be 1g
+        sum_ax += ax; sum_ay += ay; sum_az += az;
         calibration_samples++;
         
         if (calibration_samples >= CALIBRATION_COUNT) {
@@ -153,9 +186,11 @@ void loop() {
           is_calibrating = false;
           Serial.println("Calibration complete.");
           if (deviceConnected) {
-              String calib_msg = "CALIB_DONE";
-              pTxCharacteristic->setValue(calib_msg.c_str());
-              pTxCharacteristic->notify();
+              const char calib_msg[] = "CALIB_DONE";
+              notifyPacket(
+                reinterpret_cast<const uint8_t*>(calib_msg),
+                sizeof(calib_msg) - 1
+              );
           }
         }
       } else {
@@ -165,18 +200,20 @@ void loop() {
 
         unsigned long timestamp = millis();
         
-        // Send comma separated values: timestamp,ax,ay,az,gx,gy,gz
-        String data = String(timestamp) + "," +
-                      String(ax, 3) + "," +
-                      String(ay, 3) + "," +
-                      String(az, 3) + "," +
-                      String(gx, 3) + "," +
-                      String(gy, 3) + "," +
-                      String(gz, 3);
-
         if (deviceConnected) {
-          pTxCharacteristic->setValue(data.c_str());
-          pTxCharacteristic->notify();
+          // One MTU-23-safe notification per sample avoids multi-packet frame loss.
+          uint8_t packet[20];
+          packet[0] = 'I';
+          packet[1] = 'M';
+          writeUint16LE(packet, 2, sample_sequence++);
+          writeUint32LE(packet, 4, timestamp);
+          writeInt16LE(packet, 8, static_cast<int16_t>(lroundf(ax * 1000.0f)));
+          writeInt16LE(packet, 10, static_cast<int16_t>(lroundf(ay * 1000.0f)));
+          writeInt16LE(packet, 12, static_cast<int16_t>(lroundf(az * 1000.0f)));
+          writeInt16LE(packet, 14, static_cast<int16_t>(lroundf(gx * 100.0f)));
+          writeInt16LE(packet, 16, static_cast<int16_t>(lroundf(gy * 100.0f)));
+          writeInt16LE(packet, 18, static_cast<int16_t>(lroundf(gz * 100.0f)));
+          notifyPacket(packet, sizeof(packet));
         }
       }
     } else {

@@ -33,6 +33,7 @@ class CVProcess(mp_proc.Process):
                 continue
                 
             frame_time = time.time()
+            frame_sync_time = time.monotonic()
             image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             results = pose.process(image_rgb)
             
@@ -100,6 +101,7 @@ class CVProcess(mp_proc.Process):
                 try:
                     self.cv_data_queue.put_nowait({
                         'sys_time': frame_time,
+                        'sync_time': frame_sync_time,
                         'pose': lm_list
                     })
                 except queue.Full:

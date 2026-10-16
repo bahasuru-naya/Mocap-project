@@ -1,4 +1,5 @@
 import asyncio
+import struct
 import threading
 import time
 from bleak import BleakClient, BleakScanner
@@ -67,6 +68,24 @@ class BLEThread(threading.Thread):
         # Closure to capture device_name
         def handler(sender, data: bytearray):
             try:
+                if data[:2] == b'IM':
+                    if len(data) != 20:
+                        raise ValueError(f"expected 20-byte binary sample, received {len(data)}")
+                    _, sequence, node_time, ax, ay, az, gx, gy, gz = struct.unpack(
+                        '<2sHI6h', data
+                    )
+                    sensor_data = {
+                        'node_id': device_name,
+                        'sys_time': time.time(),
+                        'sync_time': time.monotonic(),
+                        'node_time': node_time,
+                        'sample_sequence': sequence,
+                        'ax': ax / 1000.0, 'ay': ay / 1000.0, 'az': az / 1000.0,
+                        'gx': gx / 100.0, 'gy': gy / 100.0, 'gz': gz / 100.0
+                    }
+                    self.data_queue.put(sensor_data)
+                    return
+
                 line = data.decode('utf-8').strip()
                 if line == "CALIB_DONE":
                     self.status_queue.put({'device': device_name, 'status': 'calibrated'})
@@ -77,6 +96,7 @@ class BLEThread(threading.Thread):
                     sensor_data = {
                         'node_id': device_name,
                         'sys_time': time.time(),
+                        'sync_time': time.monotonic(),
                         'node_time': int(values[0]),
                         'ax': float(values[1]), 'ay': float(values[2]), 'az': float(values[3]),
                         'gx': float(values[4]), 'gy': float(values[5]), 'gz': float(values[6])

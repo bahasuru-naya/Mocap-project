@@ -1,31 +1,18 @@
+import queue
 import threading
 import time
 from collections import deque
 
+from common.clock_sync import ClockOffsetEstimator, SAMPLE_INTERVAL_SECONDS
+
 
 class SyncEngine(threading.Thread):
-    """
-    Real-time version of the data-collection SyncEngine.
+    """Map IMU clocks to PC time and emit synchronized 20 Hz prediction frames."""
 
-    The matching logic is the SAME as in data collection, so the model sees
-    the same kind of input it was trained on:
-      * node millis() is mapped to PC time per device (min-offset trick that
-        removes BLE batching jitter),
-      * each output slot takes the nearest sample within `sync_tolerance`,
-        else holds the nearest one up to `max_hold`, else stays missing (None
-        -> NaN -> interpolated by the PredictionEngine),
-      * a frame waits (up to `max_wait`) for late BLE packets, but never for a
-        device that has been silent for `dead_after` seconds.
-
-    The only difference: there is no camera. In data collection every camera
-    frame defined a target time; here a virtual clock produces target times at
-    `frame_interval` (0.046 s = median camera frame interval of the training
-    recording, ~21.6 Hz).
-
-    Output frames:  {'sys_time': t, 'imu': {device: sample_dict | None}}
-    """
-
-    def __init__(self, ble_data_queue, sync_queue, target_devices, frame_interval=0.046):
+    def __init__(
+        self, ble_data_queue, sync_queue, target_devices,
+        frame_interval=SAMPLE_INTERVAL_SECONDS,
+    ):
         super().__init__()
         self.ble_data_queue = ble_data_queue
         self.sync_queue = sync_queue
@@ -33,114 +20,185 @@ class SyncEngine(threading.Thread):
 
         self.running = True
         self.daemon = True
+        self.clock_sync = ClockOffsetEstimator(target_devices)
+        self.clock_offsets = {device: None for device in target_devices}
+        self.clock_sync_locked = False
+        self.imu_buffers = {device: deque(maxlen=300) for device in target_devices}
+        self.last_arrival = {device: 0.0 for device in target_devices}
 
-        self.imu_buffers = {dev: deque(maxlen=300) for dev in self.target_devices}
+        self.max_hold = 0.15
+        self.max_interpolation_gap = 0.15
+        self.max_wait = 0.25
+        self.dead_after = 0.3
+        self.time_shift = 0.0
 
-        # Per-device clock mapping: node millis() -> PC time
-        # offset = min(arrival_time - node_time) over a sliding window.
-        self.offset_windows = {dev: deque(maxlen=500) for dev in self.target_devices}
-        self.offsets = {dev: None for dev in self.target_devices}
-        self.last_node_t = {dev: None for dev in self.target_devices}
-        self.last_arrival = {dev: 0.0 for dev in self.target_devices}
-
-        # --- must equal the values used during data collection ---
-        self.sync_tolerance = 0.06   # ideal match window (s)
-        self.max_hold = 0.15         # accept nearest sample up to this far away (s)
-        self.max_wait = 0.25         # max time a frame waits for late BLE data (s)
-        self.dead_after = 0.3        # device silent this long = treat as absent (s)
-        self.time_shift = 0.0        # use the same value you used while recording
-
-        # Virtual clock replacing the camera
         self.frame_interval = frame_interval
         self.next_frame_time = None
-        self.pending = deque(maxlen=100)     # target times waiting for their IMU data
+        self.pending = deque(maxlen=100)
+        self.latest_samples = {device: None for device in target_devices}
 
-        # Latest raw sample per device (dashboard live readout)
-        self.latest_samples = {dev: None for dev in self.target_devices}
-
-    # ------------------------------------------------------------------ #
     def _ingest_imu(self, data):
-        dev = data['node_id']
-        if dev not in self.imu_buffers:
+        device = data.get('node_id')
+        if device not in self.imu_buffers:
             return
-        node_t = data['node_time'] / 1000.0
-        last = self.last_node_t[dev]
-        if last is not None and node_t < last - 1.0:
-            # node rebooted, millis() restarted
-            self.imu_buffers[dev].clear()
-            self.offset_windows[dev].clear()
-        self.last_node_t[dev] = node_t
 
-        win = self.offset_windows[dev]
-        win.append(data['sys_time'] - node_t)
-        self.offsets[dev] = min(win)
-        self.last_arrival[dev] = time.time()
+        arrival_time = data.get('arrival_sync_time', data.get('sync_time'))
+        if arrival_time is None:
+            arrival_time = time.monotonic()
+        node_elapsed = self.clock_sync.observe_sample(
+            device, data.get('node_time'), arrival_time
+        )
+        if node_elapsed is None:
+            return
 
-        data['node_t'] = node_t
-        self.imu_buffers[dev].append(data)
-        self.latest_samples[dev] = data
+        sample = dict(data)
+        sample['node_t'] = node_elapsed
+        sample['arrival_sync_time'] = arrival_time
+        self.imu_buffers[device].append(sample)
+        self.last_arrival[device] = arrival_time
+        self.latest_samples[device] = sample
 
-    def _ts(self, dev, sample):
-        return sample['node_t'] + self.offsets[dev] + self.time_shift
+    def _lock_clock_offsets(self):
+        offsets = self.clock_sync.get_offsets()
+        if any(offset is None for offset in offsets.values()):
+            return False
 
-    # ------------------------------------------------------------------ #
+        self.clock_offsets = self.clock_sync.freeze()
+        self.clock_sync_locked = True
+        print(
+            "[SyncEngine] Clock offsets locked from pre-stream samples: "
+            + ", ".join(
+                f"{device}={offset:.6f}s"
+                for device, offset in self.clock_offsets.items()
+            )
+        )
+        return True
+
+    def _ts(self, device, sample):
+        return sample['node_t'] + self.clock_offsets[device] + self.time_shift
+
+    def _interpolate_sample(self, device, target_time):
+        before = None
+        after = None
+        before_ts = float('-inf')
+        after_ts = float('inf')
+
+        for sample in self.imu_buffers[device]:
+            sample_time = self._ts(device, sample)
+            if sample_time <= target_time and sample_time > before_ts:
+                before, before_ts = sample, sample_time
+            if sample_time >= target_time and sample_time < after_ts:
+                after, after_ts = sample, sample_time
+
+        if before is None or after is None:
+            return None
+        if before is after or before_ts == after_ts:
+            return before
+
+        gap = after_ts - before_ts
+        if not 0 < gap <= self.max_interpolation_gap:
+            return None
+
+        ratio = (target_time - before_ts) / gap
+        interpolated = dict(before)
+        for axis in ('ax', 'ay', 'az', 'gx', 'gy', 'gz'):
+            interpolated[axis] = before[axis] + (
+                after[axis] - before[axis]
+            ) * ratio
+        interpolated['sync_time'] = target_time
+        interpolated['node_t'] = (
+            target_time - self.clock_offsets[device] - self.time_shift
+        )
+        interpolated['node_time'] = int(interpolated['node_t'] * 1000)
+        interpolated['interpolated'] = True
+        return interpolated
+
+    def _find_closest(self, device, target_time):
+        closest = None
+        best_diff = float('inf')
+        newest_ts = None
+
+        for sample in self.imu_buffers[device]:
+            sample_time = self._ts(device, sample)
+            if newest_ts is None or sample_time > newest_ts:
+                newest_ts = sample_time
+            diff = abs(sample_time - target_time)
+            if diff < best_diff:
+                best_diff = diff
+                closest = sample
+
+        return closest, best_diff, newest_ts
+
+    def _drain_ble_queue(self):
+        count = 0
+        while True:
+            try:
+                sample = self.ble_data_queue.get_nowait()
+            except queue.Empty:
+                break
+            self._ingest_imu(sample)
+            count += 1
+        return count
+
+    def _build_frame(self, target_time, now):
+        frame = {
+            'sys_time': target_time + (time.time() - now),
+            'sync_time': target_time,
+            'imu': {},
+        }
+        age = now - target_time
+
+        for device in self.target_devices:
+            alive = now - self.last_arrival[device] < self.dead_after
+            closest, min_diff, newest_ts = self._find_closest(device, target_time)
+            interpolated = self._interpolate_sample(device, target_time)
+            if interpolated is not None:
+                frame['imu'][device] = interpolated
+                continue
+
+            still_coming = alive and (newest_ts is None or newest_ts < target_time)
+            if still_coming and age < self.max_wait:
+                return None
+
+            frame['imu'][device] = (
+                closest if closest is not None and min_diff <= self.max_hold else None
+            )
+        return frame
+
     def run(self):
         while self.running:
-            while not self.ble_data_queue.empty():
-                self._ingest_imu(self.ble_data_queue.get())
+            self._drain_ble_queue()
+            now = time.monotonic()
 
-            now = time.time()
+            if not self.clock_sync_locked and not self._lock_clock_offsets():
+                time.sleep(0.005)
+                continue
 
-            # ---- virtual clock: create target times (like camera frames) ----
             if self.next_frame_time is None or now - self.next_frame_time > 1.0:
-                self.next_frame_time = now           # first start / recover after a stall
+                self.next_frame_time = now
             while self.next_frame_time <= now:
                 self.pending.append(self.next_frame_time)
                 self.next_frame_time += self.frame_interval
 
-            # ---- resolve pending target times in order ----
             while self.pending:
                 target_time = self.pending[0]
-                age = now - target_time
-
-                frame = {'sys_time': target_time, 'imu': {}}
-                all_ready = True
-
-                for dev in self.target_devices:
-                    buffer = self.imu_buffers[dev]
-                    alive = (now - self.last_arrival[dev]) < self.dead_after
-
-                    closest, min_diff, newest_ts = None, float('inf'), None
-                    for sample in buffer:
-                        ts = self._ts(dev, sample)
-                        newest_ts = ts if newest_ts is None or ts > newest_ts else newest_ts
-                        diff = abs(ts - target_time)
-                        if diff < min_diff:
-                            min_diff, closest = diff, sample
-
-                    if closest is not None and min_diff <= self.sync_tolerance:
-                        frame['imu'][dev] = closest
-                        continue
-
-                    # Data for this timestamp may still be in flight
-                    still_coming = alive and (newest_ts is None or newest_ts < target_time + self.sync_tolerance)
-                    if still_coming and age < self.max_wait:
-                        all_ready = False
-                        break
-
-                    # Give up waiting: hold nearest sample if reasonably close, else missing
-                    if closest is not None and min_diff <= self.max_hold:
-                        frame['imu'][dev] = closest
-                    else:
-                        frame['imu'][dev] = None
-
-                if not all_ready:
+                frame = self._build_frame(target_time, now)
+                if frame is None:
                     break
 
                 self.pending.popleft()
-                # A frame with no IMU data at all carries no information: skip it
-                if any(v is not None for v in frame['imu'].values()) and not self.sync_queue.full():
-                    self.sync_queue.put(frame)
+                if any(sample is not None for sample in frame['imu'].values()):
+                    try:
+                        self.sync_queue.put_nowait(frame)
+                    except queue.Full:
+                        try:
+                            self.sync_queue.get_nowait()
+                        except queue.Empty:
+                            pass
+                        try:
+                            self.sync_queue.put_nowait(frame)
+                        except queue.Full:
+                            pass
 
             time.sleep(0.005)
 

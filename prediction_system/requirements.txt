@@ -1,5 +1,5 @@
 onnxruntime==1.19.2
-scikit-learn
+scikit-learn==1.6.1
 joblib
 numpy
 pandas
