@@ -1,5 +1,6 @@
 import bisect
 import csv
+import math
 import os
 import threading
 import time
@@ -21,7 +22,7 @@ class DatasetRecorder:
         self._rows_since_flush = 0
         self._FLUSH_INTERVAL = 100  # flush to disk every N rows for crash safety
         self.sample_rate_hz = SAMPLE_RATE_HZ
-        self.max_sync_gap = 0.15
+        self.max_sync_gap = 0.05
         self.recording_start_sync = None
         self.recording_start_epoch = None
         self.imu_samples = {device: [] for device in target_devices}
@@ -243,7 +244,9 @@ class DatasetRecorder:
             key=lambda sample: abs(sample['sync_time'] - target_sync),
             default=None,
         )
-        if nearest is None or abs(nearest['sync_time'] - target_sync) > self.max_sync_gap:
+        if nearest is None or not self._within_sync_gap(
+            abs(nearest['sync_time'] - target_sync)
+        ):
             return None
         return nearest['pose']
 
@@ -256,7 +259,7 @@ class DatasetRecorder:
             if before is after or before['sync_time'] == after['sync_time']:
                 return [before[axis] for axis in ('ax', 'ay', 'az', 'gx', 'gy', 'gz')]
             gap = after['sync_time'] - before['sync_time']
-            if 0 < gap <= self.max_sync_gap:
+            if 0 < gap and self._within_sync_gap(gap):
                 ratio = (target_sync - before['sync_time']) / gap
                 return [
                     before[axis] + (after[axis] - before[axis]) * ratio
@@ -268,9 +271,16 @@ class DatasetRecorder:
             key=lambda sample: abs(sample['sync_time'] - target_sync),
             default=None,
         )
-        if nearest is not None and abs(nearest['sync_time'] - target_sync) <= self.max_sync_gap:
+        if nearest is not None and self._within_sync_gap(
+            abs(nearest['sync_time'] - target_sync)
+        ):
             return [nearest[axis] for axis in ('ax', 'ay', 'az', 'gx', 'gy', 'gz')]
         return None
+
+    def _within_sync_gap(self, gap):
+        return gap <= self.max_sync_gap or math.isclose(
+            gap, self.max_sync_gap, rel_tol=0.0, abs_tol=1e-9
+        )
 
     def _summarize_missing_data(self, header, rows):
         total_rows = len(rows)

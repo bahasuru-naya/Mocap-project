@@ -1,3 +1,4 @@
+import math
 import queue
 import threading
 import time
@@ -26,8 +27,8 @@ class SyncEngine(threading.Thread):
         self.imu_buffers = {device: deque(maxlen=300) for device in target_devices}
         self.last_arrival = {device: 0.0 for device in target_devices}
 
-        self.max_hold = 0.15
-        self.max_interpolation_gap = 0.15
+        self.max_hold = 0.05
+        self.max_interpolation_gap = 0.05
         self.max_wait = 0.25
         self.dead_after = 0.3
         self.time_shift = 0.0
@@ -96,7 +97,9 @@ class SyncEngine(threading.Thread):
             return before
 
         gap = after_ts - before_ts
-        if not 0 < gap <= self.max_interpolation_gap:
+        if not 0 < gap or not self._within_tolerance(
+            gap, self.max_interpolation_gap
+        ):
             return None
 
         ratio = (target_time - before_ts) / gap
@@ -112,6 +115,12 @@ class SyncEngine(threading.Thread):
         interpolated['node_time'] = int(interpolated['node_t'] * 1000)
         interpolated['interpolated'] = True
         return interpolated
+
+    @staticmethod
+    def _within_tolerance(value, tolerance):
+        return value <= tolerance or math.isclose(
+            value, tolerance, rel_tol=0.0, abs_tol=1e-9
+        )
 
     def _find_closest(self, device, target_time):
         closest = None
@@ -161,7 +170,11 @@ class SyncEngine(threading.Thread):
                 return None
 
             frame['imu'][device] = (
-                closest if closest is not None and min_diff <= self.max_hold else None
+                closest
+                if closest is not None and self._within_tolerance(
+                    min_diff, self.max_hold
+                )
+                else None
             )
         return frame
 

@@ -44,7 +44,7 @@ The ESP32 nodes do not start from a shared hardware trigger. Each node samples i
 
 Before recording can start, the recorder collects at least 10 samples from every configured node. For each sample it subtracts the unwrapped ESP32 uptime from the PC's monotonic arrival time to get a candidate clock offset. It estimates each node's offset using the 5th percentile of up to 500 recent candidates, which reduces the effect of BLE delivery delay. This is a one-way arrival-time estimate: there is no two-way clock ping or round-trip delay measurement. The application uses the offsets to map each node's timestamps onto the PC monotonic timeline, which is also used to timestamp camera poses.
 
-At recording start, the offsets are frozen. The application does not continually correct clock drift, so long recordings may accumulate timing error as independent device clocks drift. Raw IMU and camera samples are collected on the shared timeline; they are not aligned in real time. After recording stops, the recorder creates a uniform 20 Hz CSV timeline. IMU values are interpolated when neighboring samples are no more than 150 ms apart; at stream boundaries, the nearest IMU sample is used only when it is within 150 ms. Each camera row uses the nearest pose within 150 ms. Otherwise, IMU cells are left blank and missing pose landmarks are zero-padded. The final five seconds are intentionally excluded to reduce the chance of including unintended or random movement while the user stops the recording. The dashboard displays the latest raw IMU readouts and does not show the synchronized dataset rate.
+At recording start, the offsets are frozen. The application does not continually correct clock drift, so long recordings may accumulate timing error as independent device clocks drift. Raw IMU and camera samples are collected on the shared timeline; they are not aligned in real time. After recording stops, the recorder creates a uniform 20 Hz CSV timeline. IMU values are interpolated when neighboring samples are no more than 50 ms apart; at stream boundaries, the nearest IMU sample is used only when it is within 50 ms. Each camera row uses the nearest pose within 50 ms. Otherwise, IMU cells are left blank and missing pose landmarks are zero-padded. The final five seconds are intentionally excluded to reduce the chance of including unintended or random movement while the user stops the recording. The dashboard displays the latest raw IMU readouts and does not show the synchronized dataset rate.
 
 ## Dataset Format and Model Use
 
@@ -52,7 +52,7 @@ Each saved CSV row represents one 50 ms timeline slot. It contains:
 
 - `sys_time` (Unix seconds) and `local_time` for the aligned slot.
 - `cv_0_x` through `cv_16_z`: 17 MediaPipe world-pose landmarks (51 values) used as supervised pose targets. A missing camera pose is zero-padded.
-- `ESP32_IMU_1_ax` through `ESP32_IMU_5_gz`: six accelerometer/gyroscope values per IMU (30 values). A sensor value remains blank when no valid sample is available within the 150 ms synchronization limit.
+- `ESP32_IMU_1_ax` through `ESP32_IMU_5_gz`: six accelerometer/gyroscope values per IMU (30 values). A sensor value remains blank when no valid sample is available within the 50 ms synchronization limit.
 
 Use the 30 IMU columns as model inputs and the 51 `cv_*` columns as pose labels; do not feed timestamp or `local_time` columns to the model. 
 

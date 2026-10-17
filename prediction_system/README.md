@@ -74,11 +74,13 @@ collection: unwrap each ESP32 `millis()` timestamp, calculate PC-monotonic
 arrival-minus-uptime offsets, retain up to 500 observations, and choose the
 5th-percentile offset. It freezes those offsets and maps all devices onto PC
 monotonic time, then interpolates/holds samples onto a 20 Hz (50 ms) grid.
-This is the same clock-offset calculation and 20 Hz timeline policy used for
-the saved dataset; live prediction does not use camera data. Offsets are not
-updated during the session, so clock drift is not corrected. Live mode does
-not read a saved dataset. For post-recording inference against the saved CSV,
-use `Test\predict_pose_from_recording.py`.
+Interpolation is limited to adjacent samples no more than 50 ms apart, and a
+nearest sample is held only when it is within 50 ms of the target time. This
+matches the data collector's live IMU synchronization tolerance; live
+prediction does not use camera data. Offsets are not updated during the
+session, so clock drift is not corrected. Live mode does not read a saved
+dataset. For post-recording inference against the saved CSV, use
+`Test\predict_pose_from_recording.py`.
 
 ## Training data
 
