@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 PREDICTION_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PREDICTION_ROOT / "src"))
@@ -145,6 +146,7 @@ def main():
                 f"{window_size} rows per window."
             )
 
+        features_df = pd.DataFrame(features, columns=IMU_COLS)
         prediction_columns = [f"pred_{column}" for column in POSE_COLS]
         with output_path.open("w", newline="", encoding="utf-8") as destination:
             writer = csv.DictWriter(
@@ -154,14 +156,13 @@ def main():
             )
             writer.writeheader()
             for end_index in range(window_size - 1, len(rows)):
-                pose = predictor.predict_window(
-                    features[end_index - window_size + 1:end_index + 1]
+                pose = predictor.predict_pose_from_imu(
+                    features_df.iloc[end_index - window_size + 1:end_index + 1]
                 )
                 output_row = dict(rows[end_index])
                 output_row.update({
-                    f"pred_cv_{point_index}_{axis}": repr(float(pose[point_index, axis_index]))
-                    for point_index in range(17)
-                    for axis_index, axis in enumerate(("x", "y", "z"))
+                    f"pred_{column}": repr(float(value))
+                    for column, value in pose.items()
                 })
                 writer.writerow(output_row)
 

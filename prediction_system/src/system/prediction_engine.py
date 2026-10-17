@@ -14,6 +14,7 @@ import queue
 import threading
 import time
 import numpy as np
+import pandas as pd
 from collections import deque
 import joblib
 import onnxruntime as ort
@@ -147,6 +148,22 @@ class PoseEnsemble:
         y_pred = self.pose_scaler.inverse_transform(y_scaled)[0]
         return y_pred.reshape(17, 3)
 
+    def predict_pose_from_imu(self, imu_window_df):
+        """Predict one unscaled pose from a window of IMU rows in training column order."""
+        missing_columns = [column for column in IMU_COLS if column not in imu_window_df.columns]
+        if missing_columns:
+            raise ValueError(
+                "IMU window is missing required columns: " + ", ".join(missing_columns)
+            )
+        if len(imu_window_df) != self.window_size:
+            raise ValueError(
+                f"Expected {self.window_size} rows, got {len(imu_window_df)}"
+            )
+
+        X_new = imu_window_df.loc[:, IMU_COLS].to_numpy(dtype="float32")
+        pose = self.predict_window(X_new).reshape(-1)
+        return pd.Series(pose, index=POSE_COLS)
+
 
 # ====================================================================== #
 class PredictionEngine(threading.Thread):
@@ -224,7 +241,9 @@ class PredictionEngine(threading.Thread):
     def _run_inference(self):
         try:
             t0 = time.perf_counter()
-            coords = self.predictor.predict_window(np.stack(self.window))
+            imu_window_df = pd.DataFrame(np.stack(self.window), columns=IMU_COLS)
+            pose = self.predictor.predict_pose_from_imu(imu_window_df)
+            coords = pose.to_numpy(dtype="float32").reshape(17, 3)
 
             # ---- Push to dashboard ----------------------------------- #
             if self.pose_queue.full():

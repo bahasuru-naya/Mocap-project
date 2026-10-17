@@ -17,6 +17,13 @@ returns 51 scaled pose values. The shared inference pipeline applies the IMU
 scaler, averages the three ONNX model outputs, reverses pose scaling, and
 reshapes the result into 17 `(x, y, z)` landmarks.
 
+For a single-window prediction, `PoseEnsemble.predict_pose_from_imu` accepts a
+pandas DataFrame with the 30 IMU columns and 10 rows in oldest-to-newest order.
+It selects the columns in the training order, runs the same scaler/ensemble/
+inverse-scaler steps, and returns a pandas Series indexed by the 51 `cv_*`
+pose columns in original units. Both live inference and the recorded-CSV tool
+use this same window prediction path.
+
 ## Test a recorded dataset (offline inference)
 
 The collector saves synchronized CSVs at 20 Hz (one row every 50 ms). This

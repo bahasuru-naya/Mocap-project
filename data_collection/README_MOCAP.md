@@ -18,12 +18,13 @@ A complete data collection system for synchronized AI motion capture, utilizing 
 
 ### PC Software Setup
 1. Ensure you have Python 3.8+ installed.
-2. Install the required dependencies:
+2. On Windows 10/11, turn on Bluetooth in **Settings > Bluetooth & devices** (or the Bluetooth tile in Quick Settings). The PC must have a Bluetooth adapter that supports Bluetooth Low Energy (BLE); install or update its driver if Windows does not show a Bluetooth toggle. The application scans for the ESP32 nodes over BLE, so you do not need to pair them manually in Windows.
+3. Install the required dependencies:
    ```bash
    pip install -r requirements.txt
    ```
-3. Connect a webcam to your PC.
-4. Turn on your ESP32 modules.
+4. Connect a webcam to your PC.
+5. Turn on your ESP32 modules and keep them within BLE range of the PC.
 
 ### Running the System
 Run the main application:
@@ -35,8 +36,15 @@ python src/app_main.py
 - **Calibration:** Before starting a recording, place all IMUs flat and stationary, and click "Calibrate All Sensors". Wait for the status indicator on each node to turn Blue ("CALIBRATED"). This will cancel out gyroscope drift and zero out the accelerometer offset.
 - **Recording:** Enter a session name and click "Start Recording".
 - **Synchronization Monitor:** The saved dataset is aligned to a 20 Hz timeline (one row every 50 ms) after recording stops. "Live Readout Rate" reports dashboard telemetry updates only; it is not a synchronized data rate or the saved dataset sampling rate.
-- **Data Output:** Before recording can start, the recorder observes at least 10 IMU samples from every configured node and estimates each ESP32 uptime offset against the PC monotonic clock from BLE sample-arrival observations. It selects the 5th percentile of up to 500 offsets to reduce BLE-delay bias. This is a one-way arrival-time estimate, not a two-way clock-ping measurement or low-round-trip sample selection. The same offset estimator and timestamp-unwrapping logic are used for live prediction. Offsets are frozen when recording starts; the system does not check or correct clock drift during a recording. Raw IMU and camera samples are logged against the shared PC-monotonic timeline, without realtime IMU/CV alignment. After recording stops, the saved dataset is resampled onto a uniform 20 Hz timeline. IMU values are interpolated between samples no more than 150 ms apart; the nearest sample is used at stream boundaries if within 150 ms. The nearest camera pose within 150 ms is used. The final 5 seconds are intentionally excluded. Missing measurements or gaps longer than 150 ms remain blank (or zero-padded for CV landmarks). The live dashboard only displays the latest raw IMU readout; its update rate is not the dataset rate.
-- **Packet-loss reporting:** The saved-dataset summary reports IMU sequence-number gaps separately from blank values remaining after 20 Hz resampling. The firmware advances its sequence by elapsed timer ticks, so timer ticks missed while its loop is busy also appear as gaps. Sequence gaps expose losses between received packets; they cannot identify a packet lost after the final received packet or distinguish every cause of a gap.
+- **Packet-loss reporting:** The saved-dataset summary reports IMU sequence-number gaps separately from blank values remaining after 20 Hz resampling. The firmware increments its 16-bit sequence number once per transmitted packet. Gaps between received sequence numbers indicate missing notifications, but timer ticks coalesced while the firmware loop is busy are not reflected in the counter. Sequence numbers wrap, and gaps cannot identify a packet lost after the final received packet or determine every cause of a missing notification.
+
+## Synchronization Details
+
+The ESP32 nodes do not start from a shared hardware trigger. Each node samples its BMI160 on a 20 ms timer (nominally 50 Hz) and sends BLE notifications containing a per-node sequence number, its millisecond uptime, and the six accelerometer/gyroscope values. The PC also timestamps each notification when it arrives.
+
+Before recording can start, the recorder collects at least 10 samples from every configured node. For each sample it subtracts the unwrapped ESP32 uptime from the PC's monotonic arrival time to get a candidate clock offset. It estimates each node's offset using the 5th percentile of up to 500 recent candidates, which reduces the effect of BLE delivery delay. This is a one-way arrival-time estimate: there is no two-way clock ping or round-trip delay measurement. The application uses the offsets to map each node's timestamps onto the PC monotonic timeline, which is also used to timestamp camera poses.
+
+At recording start, the offsets are frozen. The application does not continually correct clock drift, so long recordings may accumulate timing error as independent device clocks drift. Raw IMU and camera samples are collected on the shared timeline; they are not aligned in real time. After recording stops, the recorder creates a uniform 20 Hz CSV timeline. IMU values are interpolated when neighboring samples are no more than 150 ms apart; at stream boundaries, the nearest IMU sample is used only when it is within 150 ms. Each camera row uses the nearest pose within 150 ms. Otherwise, IMU cells are left blank and missing pose landmarks are zero-padded. The final five seconds are intentionally excluded. The dashboard displays the latest raw IMU readouts and does not show the synchronized dataset rate.
 
 ## Dataset Format and Model Use
 
@@ -46,7 +54,7 @@ Each saved CSV row represents one 50 ms timeline slot. It contains:
 - `cv_0_x` through `cv_16_z`: 17 MediaPipe world-pose landmarks (51 values) used as supervised pose targets. A missing camera pose is zero-padded.
 - `ESP32_IMU_1_ax` through `ESP32_IMU_5_gz`: six accelerometer/gyroscope values per IMU (30 values). A sensor value remains blank when no valid sample is available within the 150 ms synchronization limit.
 
-Use the 30 IMU columns as model inputs and the 51 `cv_*` columns as pose labels; do not feed timestamp or `local_time` columns to the model. Rows are synchronized but not necessarily complete: training should account for blank IMU cells and zero-padded missing poses rather than treating them as measured values. The last five seconds of each recording are intentionally omitted. See [the prediction-system guide](../prediction_system/README.md) for the model input contract and offline inference command. The repository includes inference artifacts; it does not currently include a model-training script.
+Use the 30 IMU columns as model inputs and the 51 `cv_*` columns as pose labels; do not feed timestamp or `local_time` columns to the model. 
 
 ## Architecture
 
