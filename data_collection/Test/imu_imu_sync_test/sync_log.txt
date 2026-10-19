@@ -1,0 +1,78 @@
+==============================================================================
+IMU SYNCHRONISATION CHECK
+==============================================================================
+file        : testsync_20261019-162451.csv
+rows        : 910   duration: 45.45 s
+local time  : 2026-10-19 16:24:51.037059  ->  2026-10-19 16:25:36.487059
+sample step : median 50.00 ms (20.00 Hz), min 50.00, max 50.00, std 0.000 ms
+gaps > 1.5x step: 0
+IMUs found  : [1, 2, 3, 4, 5]   NaNs in IMU columns: 0
+signal used : gyro
+lag resolution: one sample = 50.0 ms (sub-sample values are interpolated estimates)
+
+==============================================================================
+SPIKE DETECTION
+==============================================================================
+prominence threshold : 1.133  (signal units)
+spikes found per IMU: IMU1=14, IMU2=14, IMU3=14, IMU4=14, IMU5=14
+reference IMU        : 1
+spikes matched in ALL IMUs: 14   (unmatched reference spikes: 0)
+
+==============================================================================
+PER-SPIKE LAG vs IMU 1  (ms, +ve = later than reference; half-height centroid timing)
+==============================================================================
+  # cyc  t_ref(s)     IMU1     IMU2     IMU3     IMU4     IMU5   spread
+  1   1     4.286     +0.0     -3.3     +0.2     -2.2     -2.1      3.5
+  2   1     4.637     +0.0     +0.1     +4.5     -3.0     -1.1      7.4
+  3   2    10.016     +0.0     -2.4     -0.7     -5.3     -1.1      5.3
+  4   2    10.473     +0.0    -16.1    -10.4    -15.6    -18.2     18.2
+  5   3    15.588     +0.0     +0.0     +1.4     +2.2     +1.4      2.2
+  6   3    16.116     +0.0     -0.7    -14.3     -3.1     -5.0     14.3
+  7   4    22.929     +0.0     -4.3    -13.5     -2.9     -2.6     13.5
+  8   4    23.365     +0.0     +4.8     -4.4    +11.0     +6.0     15.4
+  9   5    32.440     +0.0     -3.8     -1.2     -3.4    -12.3     12.3
+ 10   5    32.806     +0.0    -14.1    -12.4    -12.0    -12.8     14.1
+ 11   6    38.401     +0.0     -1.7     +0.1     -0.5     -0.7      1.8
+ 12   6    38.806     +0.0     +8.5     +2.4    +26.8    +23.9     26.8
+ 13   7    44.787     +0.0     -1.2    +10.3     -1.6     -1.1     11.9
+ 14   7    45.212     +0.0     -2.7     -3.0     +3.9     -0.9      6.9
+
+==============================================================================
+PER-IMU SUMMARY vs IMU 1  (sample period = 50.0 ms)
+==============================================================================
+ IMU   median     mean     std      min      max pk=same%  in tol%    xcorr  drift/min
+   1     +0.0     +0.0     0.0     +0.0     +0.0      100      100      ref       -0.0
+   2     -2.1     -2.6     6.3    -16.1     +8.5       86      100     -3.1       +2.1
+   3     -1.0     -2.9     7.3    -14.3    +10.3       79      100     -2.0       +3.7
+   4     -2.6     -0.4    10.1    -15.6    +26.8       71      100     -2.1       +8.9
+   5     -1.1     -1.9     9.8    -18.2    +23.9       71      100     -2.9       +2.4
+(lag values in ms. pk=same% = share of spikes whose raw peak falls on the same sample as the
+ reference; in tol% = share within tolerance by centroid timing; drift/min = robust (Theil-Sen)
+ slope of lag vs time in ms per minute - indicative only on a short recording)
+
+Spike-time spread across all IMUs (latest minus earliest): median 12.1 ms, max 26.8 ms
+Raw peak-sample spread (quantised, flat-topped spikes can hop 1-2 samples): max 100 ms
+
+PAIRWISE MEDIAN LAG (ms): row IMU -> column IMU  (+ve = column sees spikes later)
+          IMU1     IMU2     IMU3     IMU4     IMU5
+IMU1      +0.0     -2.1     -1.0     -2.6     -1.1
+IMU2      +2.1     +0.0     +1.7     +1.2     +1.2
+IMU3      +1.0     -1.7     +0.0     -0.1     -0.4
+IMU4      +2.6     -1.2     +0.1     +0.0     -0.8
+IMU5      +1.1     -1.2     +0.4     +0.8     +0.0
+
+CROSS-CORRELATION LAG PER MOTION CYCLE (ms vs reference)
+ cycle     IMU2     IMU3     IMU4     IMU5
+     1     -0.2     +0.9     -0.5     -0.3
+     2     -5.3     -4.7     -4.3     -4.4
+     3     +2.7     +1.2     +2.5     +2.2
+     4     -2.7     -5.9     -1.1     -2.0
+     5     -6.3     -4.3     -5.0     -7.7
+     6     -0.8     -0.4     +1.0     +0.8
+     7     -3.4     +2.2     -3.0     -3.3
+
+==============================================================================
+VERDICT: SYNCHRONISED   (tolerance +/-50 ms)
+==============================================================================
+
+Results written to: /home/claude/results

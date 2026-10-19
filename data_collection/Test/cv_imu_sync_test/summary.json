@@ -1,0 +1,89 @@
+{
+  "meta": {
+    "file": "test_20261019-154647.csv",
+    "rows": 865,
+    "duration_s": 43.200000047683716,
+    "cv_point": 0,
+    "imu": 1,
+    "stale_cv_rows": 37
+  },
+  "verdict": "NOT SYNCHRONISED",
+  "reasons": [
+    "lag estimates: spike median +147 ms; speed cross-correlation +180 ms; angle-vs-position cross-correlation +166 ms  ->  best estimate (median of methods) +166 ms",
+    "CV sees the motion later than the IMU (CV is delayed) by about 166 ms (tolerance +/-50 ms)",
+    "the delay is stable: per-burst lags differ by only 16 ms, so it behaves like a constant latency that can be compensated",
+    "suggested fix: shift the CV data 3 sample(s) (150 ms) earlier (or the IMU data the other way)"
+  ],
+  "tolerance_ms": 49.99995231628418,
+  "sample_period_ms": 49.99995231628418,
+  "spikes_matched": 32,
+  "xcorr_lag_ms": 180.37793046524249,
+  "corr_no_shift": 0.4490101823990911,
+  "corr_after_shift": 0.823710151330833,
+  "spike_lag": {
+    "n": 32,
+    "median_ms": 146.7169829033228,
+    "mean_ms": 149.32208556914446,
+    "std_ms": 79.94608741378934,
+    "min_ms": 5.838360924528274,
+    "max_ms": 258.57769111554063,
+    "ci_low_ms": 105.27117762940819,
+    "ci_high_ms": 196.51997672984223,
+    "median_peak_sample_ms": 149.99985694885254
+  },
+  "bursts": [
+    {
+      "burst": 1,
+      "i0": 76,
+      "i1": 239,
+      "t0": 3.799999952316284,
+      "t1": 11.900000095367432,
+      "n": 10,
+      "median_ms": 138.49282529552775,
+      "xc_ms": 143.9221591457557,
+      "xc_peak": 0.7930263342124811
+    },
+    {
+      "burst": 2,
+      "i0": 330,
+      "i1": 628,
+      "t0": 16.5,
+      "t1": 31.34999990463257,
+      "n": 16,
+      "median_ms": 154.89359674471535,
+      "xc_ms": 188.12457658811633,
+      "xc_peak": 0.7858467495749049
+    },
+    {
+      "burst": 3,
+      "i0": 734,
+      "i1": 865,
+      "t0": 36.700000047683716,
+      "t1": 43.200000047683716,
+      "n": 6,
+      "median_ms": 204.8465546902385,
+      "xc_ms": 187.12212414024086,
+      "xc_peak": 0.7500983502014124
+    }
+  ],
+  "burst_xcorr_range_ms": 44.20241744236063,
+  "lag_estimates_ms": {
+    "spike median": 146.7169829033228,
+    "speed cross-correlation": 180.37793046524249,
+    "angle-vs-position cross-correlation": 165.61058832275182
+  },
+  "best_lag_ms": 165.61058832275182,
+  "angle_check": {
+    "gyro_axis": "z",
+    "cv_axis": "y",
+    "sign": 1.0,
+    "lag_ms": 165.61058832275182,
+    "corr_no_shift": 0.7086269589921986,
+    "corr_at_best_lag": 0.9581412245661611,
+    "burst_lag_ms": [
+      158.5185488313348,
+      173.25426865181402,
+      156.93233565351687
+    ]
+  }
+}

@@ -61,7 +61,7 @@ class CalibrationDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Calibration Countdown")
         self.setFixedSize(400, 500)
-        self.countdown = 10
+        self.countdown = 5
         self.setStyleSheet("""
             QDialog { background-color: #1e1e1e; }
             QLabel { color: #ffffff; font-family: 'Segoe UI', Inter, sans-serif; }
@@ -69,7 +69,7 @@ class CalibrationDialog(QDialog):
         
         layout = QVBoxLayout(self)
         
-        instruction = QLabel("Please stand in the Position of Attention\n(Straight, arms at sides)")
+        instruction = QLabel("Please place all 5 IMU sensors on \n a flat surface in the same orientation. \n (Align all sensors in the same direction.)")
         instruction.setAlignment(Qt.AlignCenter)
         instruction.setStyleSheet("font-size: 18px; font-weight: bold; color: #bb86fc;")
         layout.addWidget(instruction)
@@ -80,7 +80,7 @@ class CalibrationDialog(QDialog):
         image_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
         "img",
-        "Position of Attention.jpg"
+        "Sensor_position.png"
         )
         
         pixmap = QPixmap(image_path)

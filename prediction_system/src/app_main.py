@@ -47,14 +47,15 @@ def main():
         os.path.join(BASE_DIR, "model", f"best_model_overall_member{i}.onnx")
         for i in range(N_MODELS)
     ]
-    IMU_SCALER_PATH  = os.path.join(BASE_DIR, "scalers", "imu_scaler.joblib")
-    POSE_SCALER_PATH = os.path.join(BASE_DIR, "scalers", "pose_scaler.joblib")
+    IMU_SCALER_PATH  = os.path.join(BASE_DIR, "scalers", "imu_scaler.onnx")
+    POSE_SCALER_PATH = os.path.join(BASE_DIR, "scalers", "pose_scaler.onnx")
 
     missing = [p for p in MODEL_PATHS + [IMU_SCALER_PATH, POSE_SCALER_PATH] if not os.path.exists(p)]
     if missing:
         print("[ERROR] Missing file(s):")
         for p in missing:
             print("   ", p)
+        print("Run src/convert_model_to_onnx.py to create the .onnx models and scalers.")
         sys.exit(1)
 
     # ------------------------------------------------------------------ #

@@ -5,6 +5,10 @@ Loads an ENSEMBLE of ONNX models (the 3 training seeds), runs each on the same
 input window and averages their outputs, exactly like EnsembleModel.predict()
 in the training notebook.
 
+Everything at inference is ONNX: the IMU scaler, the three models and the pose
+inverse scaler are all .onnx files (see src/convert_model_to_onnx.py), so no
+scikit-learn, joblib or TensorFlow is needed at runtime.
+
 The window length is read from the ONNX model itself, so it always matches the
 training pipeline (currently 10 frames).
 """
@@ -16,7 +20,6 @@ import time
 import numpy as np
 import pandas as pd
 from collections import deque
-import joblib
 import onnxruntime as ort
 
 
@@ -54,13 +57,36 @@ def fill_missing(X):
     return X
 
 
+class OnnxScaler:
+    """A StandardScaler exported to ONNX (transform or inverse transform).
+
+    Call it with a float array of shape (N, n_features); it returns float32.
+    """
+
+    def __init__(self, path):
+        path = os.fspath(path)
+        if not path.lower().endswith(".onnx"):
+            raise ValueError(
+                f"Scaler must be an .onnx file, got '{path}'. "
+                "Run src/convert_model_to_onnx.py to create it from the .joblib file."
+            )
+        self.session = ort.InferenceSession(path, providers=['CPUExecutionProvider'])
+        model_input = self.session.get_inputs()[0]
+        self.input_name = model_input.name
+        self.n_features_in_ = int(model_input.shape[-1])
+
+    def __call__(self, values):
+        values = np.ascontiguousarray(values, dtype="float32")
+        return self.session.run(None, {self.input_name: values})[0]
+
+
 class PoseEnsemble:
     """Loads the trained ensemble and applies its shared IMU-to-pose pipeline."""
 
     def __init__(self, model_paths, imu_scaler_path, pose_scaler_path, prefer_gpu=True):
         print("[PredictionEngine] Loading scalers...")
-        self.imu_scaler = joblib.load(imu_scaler_path)
-        self.pose_scaler = joblib.load(pose_scaler_path)
+        self.imu_scaler = OnnxScaler(imu_scaler_path)
+        self.pose_scaler = OnnxScaler(pose_scaler_path)
         if self.imu_scaler.n_features_in_ != len(IMU_COLS):
             raise ValueError(
                 f"IMU scaler expects {self.imu_scaler.n_features_in_} features, "
@@ -139,13 +165,13 @@ class PoseEnsemble:
             raise ValueError(f"Expected IMU window shape {expected_shape}, received {X.shape}")
 
         X = fill_missing(X.copy())
-        X_batch = self.imu_scaler.transform(X)[np.newaxis, ...].astype("float32")
+        X_batch = self.imu_scaler(X)[np.newaxis, ...]
         outputs = [
             session.run(None, {input_name: X_batch})[0]
             for session, input_name in zip(self.sessions, self.input_names)
         ]
         y_scaled = np.mean(outputs, axis=0)
-        y_pred = self.pose_scaler.inverse_transform(y_scaled)[0]
+        y_pred = self.pose_scaler(y_scaled)[0]
         return y_pred.reshape(17, 3)
 
     def predict_pose_from_imu(self, imu_window_df):
