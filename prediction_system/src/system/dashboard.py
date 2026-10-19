@@ -339,6 +339,16 @@ class Dashboard(QMainWindow):
         """)
         self.calib_btn.clicked.connect(self._start_calibration)
         ctrl_layout.addWidget(self.calib_btn)
+
+        self.prediction_btn = QPushButton("Start Prediction")
+        self.prediction_btn.setMinimumHeight(55)
+        self.prediction_btn.setMaximumWidth(350)
+        self.prediction_btn.setStyleSheet("""
+            QPushButton       { background-color: #2e7d32; font-size: 16px; }
+            QPushButton:hover { background-color: #388e3c; }
+        """)
+        self.prediction_btn.clicked.connect(self._toggle_prediction)
+        ctrl_layout.addWidget(self.prediction_btn)
         ctrl_group.setLayout(ctrl_layout)
         controls_row.addWidget(ctrl_group)
 
@@ -448,6 +458,37 @@ class Dashboard(QMainWindow):
 
     def _calibrate_single(self, device):
         self.ble_cmd_queue.put({'device': device, 'action': 'calibrate'})
+
+    def _toggle_prediction(self):
+        if self.prediction_engine.is_prediction_enabled():
+            self.prediction_engine.stop_prediction()
+            self.prediction_btn.setText("Start Prediction")
+            self.prediction_btn.setStyleSheet("""
+                QPushButton       { background-color: #2e7d32; font-size: 16px; }
+                QPushButton:hover { background-color: #388e3c; }
+            """)
+            return
+
+        if not self.sync_engine.clock_sync_locked:
+            sample_counts = self.sync_engine.clock_sync.sample_counts()
+            details = ", ".join(
+                f"{device}: {count}/{self.sync_engine.clock_sync.minimum_samples}"
+                for device, count in sample_counts.items()
+            )
+            QMessageBox.warning(
+                self,
+                "Clock Sync Not Ready",
+                "Prediction can start after every IMU has enough clock-sync "
+                f"samples.\n{details}",
+            )
+            return
+
+        self.prediction_engine.start_prediction()
+        self.prediction_btn.setText("Stop Prediction")
+        self.prediction_btn.setStyleSheet("""
+            QPushButton       { background-color: #c62828; font-size: 16px; }
+            QPushButton:hover { background-color: #e53935; }
+        """)
 
     # ------------------------------------------------------------------ #
     #  Periodic UI update (~30 FPS)

@@ -180,6 +180,9 @@ class PredictionEngine(threading.Thread):
         self.pose_queue = pose_queue
         self.running = True
         self.daemon = True
+        self.prediction_enabled = False
+        self._prediction_lock = threading.Lock()
+        self._prediction_generation = 0
 
         if isinstance(model_paths, (str, bytes)):      # single path still works
             model_paths = [model_paths]
@@ -213,15 +216,63 @@ class PredictionEngine(threading.Thread):
         while self.running:
             frames_consumed = 0
 
-            while not self.sync_queue.empty():
-                frame = self.sync_queue.get()
-                self.window.append(self._frame_to_row(frame))
-                frames_consumed += 1
+            with self._prediction_lock:
+                generation = self._prediction_generation
+                if self.prediction_enabled:
+                    while True:
+                        try:
+                            frame = self.sync_queue.get_nowait()
+                        except queue.Empty:
+                            break
+                        self.window.append(self._frame_to_row(frame))
+                        frames_consumed += 1
+                else:
+                    self._drain_queue(self.sync_queue)
+                    self.window.clear()
 
-            if frames_consumed > 0 and len(self.window) == self.window_size:
-                self._run_inference()
+                inference_window = (
+                    list(self.window)
+                    if frames_consumed > 0
+                    and len(self.window) == self.window_size
+                    else None
+                )
+
+            if inference_window is not None:
+                self._run_inference(generation, inference_window)
 
             time.sleep(0.005)
+
+    @staticmethod
+    def _drain_queue(target_queue):
+        while True:
+            try:
+                target_queue.get_nowait()
+            except queue.Empty:
+                return
+
+    def start_prediction(self):
+        with self._prediction_lock:
+            self._drain_queue(self.sync_queue)
+            self._drain_queue(self.pose_queue)
+            self.window.clear()
+            self._prediction_generation += 1
+            self.prediction_enabled = True
+
+    def stop_prediction(self):
+        with self._prediction_lock:
+            self.prediction_enabled = False
+            self._prediction_generation += 1
+            self.window.clear()
+            self._drain_queue(self.sync_queue)
+            self._drain_queue(self.pose_queue)
+            self.inference_fps = 0
+            self.inference_ms = 0.0
+            self._frame_count = 0
+            self._ms_accum = 0.0
+
+    def is_prediction_enabled(self):
+        with self._prediction_lock:
+            return self.prediction_enabled
 
     # ------------------------------------------------------------------ #
     @staticmethod
@@ -238,31 +289,36 @@ class PredictionEngine(threading.Thread):
     # ------------------------------------------------------------------ #
     #  Inference
     # ------------------------------------------------------------------ #
-    def _run_inference(self):
+    def _run_inference(self, generation, window_rows):
         try:
             t0 = time.perf_counter()
-            imu_window_df = pd.DataFrame(np.stack(self.window), columns=IMU_COLS)
+            imu_window_df = pd.DataFrame(np.stack(window_rows), columns=IMU_COLS)
             pose = self.predictor.predict_pose_from_imu(imu_window_df)
             coords = pose.to_numpy(dtype="float32").reshape(17, 3)
 
-            # ---- Push to dashboard ----------------------------------- #
-            if self.pose_queue.full():
-                try:
-                    self.pose_queue.get_nowait()
-                except queue.Empty:
-                    pass
-            self.pose_queue.put({'coords': coords, 'timestamp': time.time()})
+            with self._prediction_lock:
+                if (
+                    not self.prediction_enabled
+                    or generation != self._prediction_generation
+                ):
+                    return
 
-            # ---- FPS / latency tracking ------------------------------ #
-            self._frame_count += 1
-            self._ms_accum += (time.perf_counter() - t0) * 1000.0
-            now = time.time()
-            if now - self._last_fps_time >= 1.0:
-                self.inference_fps = self._frame_count
-                self.inference_ms = self._ms_accum / max(self._frame_count, 1)
-                self._frame_count = 0
-                self._ms_accum = 0.0
-                self._last_fps_time = now
+                if self.pose_queue.full():
+                    try:
+                        self.pose_queue.get_nowait()
+                    except queue.Empty:
+                        pass
+                self.pose_queue.put({'coords': coords, 'timestamp': time.time()})
+
+                self._frame_count += 1
+                self._ms_accum += (time.perf_counter() - t0) * 1000.0
+                now = time.time()
+                if now - self._last_fps_time >= 1.0:
+                    self.inference_fps = self._frame_count
+                    self.inference_ms = self._ms_accum / max(self._frame_count, 1)
+                    self._frame_count = 0
+                    self._ms_accum = 0.0
+                    self._last_fps_time = now
 
         except Exception as e:
             print(f"[PredictionEngine] Inference error: {e}")

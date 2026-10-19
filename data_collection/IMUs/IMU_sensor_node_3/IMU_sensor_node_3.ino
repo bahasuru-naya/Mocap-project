@@ -27,6 +27,8 @@ uint16_t sample_sequence = 0;
 // Calibration offsets
 float gx_offset = 0, gy_offset = 0, gz_offset = 0;
 float ax_offset = 0, ay_offset = 0, az_offset = 0;
+constexpr float GYRO_LSB_TO_RAD_PER_SEC =
+    (2000.0f / 32768.0f) * (3.14159265f / 180.0f);
 volatile bool is_calibrating = false;
 int calibration_samples = 0;
 const int CALIBRATION_COUNT = 100;
@@ -163,9 +165,9 @@ void loop() {
 
     if (bmi160.getAccelGyroData(accelGyro) == BMI160_OK) {
       // Convert to meaningful units
-      float gx = accelGyro[0] * 3.14159 / 180.0;
-      float gy = accelGyro[1] * 3.14159 / 180.0;
-      float gz = accelGyro[2] * 3.14159 / 180.0;
+      float gx = accelGyro[0] * GYRO_LSB_TO_RAD_PER_SEC;
+      float gy = accelGyro[1] * GYRO_LSB_TO_RAD_PER_SEC;
+      float gz = accelGyro[2] * GYRO_LSB_TO_RAD_PER_SEC;
 
       float ax = accelGyro[3] / 16384.0;
       float ay = accelGyro[4] / 16384.0;

@@ -1,8 +1,0 @@
-first time boot
--- press reset whiile hold boot button in esp32c3
-
-after upload button press reset button to execute code
-
-python Bluetooth_receiver.py
-
-python server.py

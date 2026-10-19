@@ -8,6 +8,7 @@ A complete data collection system for synchronized AI motion capture, utilizing 
 1. You will need 5 ESP32 microcontrollers and 5 BMI160 sensors.
 2. Wire each BMI160 sensor to its ESP32 using I2C.
 3. Use the matching sketch in `IMUs/IMU_sensor_node_<n>/` for each board. All five sketches use the same firmware; only `NODE_ID` differs.
+   The DFRobot BMI160 library configures the accelerometer to ±2 g and gyroscope to ±2000°/s. Firmware converts accelerometer counts at 16384 counts/g and maps the signed 16-bit gyro range (−32768..32767) to ±2000°/s before converting to rad/s.
 4. Upload each matching sketch to its board:
    - `IMU_sensor_node_1/IMU_sensor_node_1.ino` -> `ESP32_IMU_1`
    - `IMU_sensor_node_2/IMU_sensor_node_2.ino` -> `ESP32_IMU_2`
@@ -52,7 +53,7 @@ Each saved CSV row represents one 50 ms timeline slot. It contains:
 
 - `sys_time` (Unix seconds) and `local_time` for the aligned slot.
 - `cv_0_x` through `cv_16_z`: 17 MediaPipe world-pose landmarks (51 values) used as supervised pose targets. A missing camera pose is zero-padded.
-- `ESP32_IMU_1_ax` through `ESP32_IMU_5_gz`: six accelerometer/gyroscope values per IMU (30 values). A sensor value remains blank when no valid sample is available within the 50 ms synchronization limit.
+- `ESP32_IMU_1_ax` through `ESP32_IMU_5_az`: accelerometer values in g after subtracting the stationary calibration offset, which includes gravity at the calibration orientation; these are not gravity-compensated linear accelerations. `ESP32_IMU_1_gx` through `ESP32_IMU_5_gz`: gyroscope angular rates in rad/s. Gyroscope packet fields use 0.01 rad/s units on the wire and are decoded to rad/s by the PC. A sensor value remains blank when no valid sample is available within the 50 ms synchronization limit.
 
 Use the 30 IMU columns as model inputs and the 51 `cv_*` columns as pose labels; do not feed timestamp or `local_time` columns to the model. 
 

@@ -78,8 +78,11 @@ Interpolation is limited to adjacent samples no more than 50 ms apart, and a
 nearest sample is held only when it is within 50 ms of the target time. This
 matches the data collector's live IMU synchronization tolerance; live
 prediction does not use camera data. Offsets are not updated during the
-session, so clock drift is not corrected. Live mode does not read a saved
-dataset. For post-recording inference against the saved CSV, use
+session, so clock drift is not corrected. Use **Start Prediction** once clock
+synchronization is ready to begin live inference; **Stop Prediction** halts
+inference and clears its rolling input window while BLE streaming and clock
+synchronization continue. Live mode does not read a saved dataset. For
+post-recording inference against the saved CSV, use
 `Test\predict_pose_from_recording.py`.
 
 ## Training data

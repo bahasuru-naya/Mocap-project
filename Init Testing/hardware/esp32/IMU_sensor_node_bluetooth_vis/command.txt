@@ -1,5 +1,0 @@
-python bluetooth_receiver.py
-
-python server.py
-
-.\.venv\Scripts\activate 

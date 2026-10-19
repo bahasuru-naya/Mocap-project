@@ -151,6 +151,38 @@ class PredictionSyncEngineTests(unittest.TestCase):
         })
         self.assertAlmostEqual(engine.clock_offsets[devices[0]], 50.2)
 
+    def test_prediction_can_be_started_and_stopped_after_clock_lock(self):
+        from prediction_system.src.system.prediction_engine import PredictionEngine
+
+        sync_queue = queue.Queue()
+        pose_queue = queue.Queue()
+        with patch(
+            "prediction_system.src.system.prediction_engine.PoseEnsemble"
+        ) as predictor:
+            predictor.return_value.window_size = 2
+            predictor.return_value.sessions = []
+            engine = PredictionEngine(
+                sync_queue, pose_queue, [], "", "", prefer_gpu=False
+            )
+
+        engine.window.extend([[1.0], [2.0]])
+        sync_queue.put({"imu": {}})
+        pose_queue.put({"coords": []})
+
+        engine.start_prediction()
+        self.assertTrue(engine.prediction_enabled)
+        self.assertEqual(len(engine.window), 0)
+        self.assertTrue(sync_queue.empty())
+        self.assertTrue(pose_queue.empty())
+
+        engine.window.append([3.0])
+        sync_queue.put({"imu": {}})
+        engine.stop_prediction()
+        self.assertFalse(engine.prediction_enabled)
+        self.assertEqual(len(engine.window), 0)
+        self.assertTrue(sync_queue.empty())
+        self.assertTrue(pose_queue.empty())
+
 
 class DatasetRecorderClockTests(unittest.TestCase):
     def test_recorder_uses_shared_offsets_and_maps_samples_to_pc_time(self):

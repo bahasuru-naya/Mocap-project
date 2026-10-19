@@ -30,6 +30,8 @@ uint32_t schedulerSkips = 0;
 uint32_t lastReportMs = 0;
 uint32_t lastSampleUs = 0;
 bool haveLastSample = false;
+constexpr float GYRO_LSB_TO_RAD_PER_SEC =
+    (2000.0f / 32768.0f) * (3.14159265f / 180.0f);
 
 void sendMessage(const char* message, size_t length) {
   for (size_t offset = 0; offset < length; offset += NOTIFICATION_CHUNK_SIZE) {
@@ -155,9 +157,9 @@ void loop() {
           accelGyro[3] / 16384.0f,
           accelGyro[4] / 16384.0f,
           accelGyro[5] / 16384.0f,
-          accelGyro[0] * 3.14159265f / 180.0f,
-          accelGyro[1] * 3.14159265f / 180.0f,
-          accelGyro[2] * 3.14159265f / 180.0f
+          accelGyro[0] * GYRO_LSB_TO_RAD_PER_SEC,
+          accelGyro[1] * GYRO_LSB_TO_RAD_PER_SEC,
+          accelGyro[2] * GYRO_LSB_TO_RAD_PER_SEC
         );
         if (recordLength > 0 && recordLength < sizeof(record)) {
           sendMessage(record, static_cast<size_t>(recordLength));
