@@ -1,0 +1,13 @@
+scope,imu,lag_ms,peak_corr
+whole record,2,793.03,0.0668
+cycle 1,2,-297.58,0.1397
+cycle 2,2,194.44,0.0788
+whole record,3,-1.17,0.0448
+cycle 1,3,426.58,0.2093
+cycle 2,3,-5.58,0.0517
+whole record,4,147.89,0.0419
+cycle 1,4,-500.0,0.1481
+cycle 2,4,148.94,0.0375
+whole record,5,658.34,0.0911
+cycle 1,5,-72.09,0.1243
+cycle 2,5,-8.73,0.0635

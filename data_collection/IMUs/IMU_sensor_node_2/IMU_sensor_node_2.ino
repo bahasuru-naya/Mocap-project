@@ -45,7 +45,7 @@ constexpr float GYRO_LSB_TO_RAD_PER_SEC =
 
 // Sensor positive X arrow points into the table: expected stationary vector.
 // Change EXPECTED_AX_G to +1.0f if your raw stationary X reading is positive.
-constexpr float EXPECTED_AX_G = -1.0f;
+constexpr float EXPECTED_AX_G =  1.0f;
 constexpr float EXPECTED_AY_G =  0.0f;
 constexpr float EXPECTED_AZ_G =  0.0f;
 
