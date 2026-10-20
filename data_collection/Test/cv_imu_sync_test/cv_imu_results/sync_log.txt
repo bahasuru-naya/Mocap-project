@@ -1,0 +1,74 @@
+==============================================================================
+CV vs IMU SYNCHRONISATION CHECK
+==============================================================================
+file         : test_20261020-214405.csv
+rows         : 1535   duration: 76.70 s
+local time   : 2026-10-20 21:44:05.345253  ->  2026-10-20 21:45:22.045253
+sample step  : median 50.00 ms (20.00 Hz), min 50.00, max 50.00, std 0.000 ms; gaps > 1.5x step: 0
+CV landmark  : cv_0   IMU: 1   signals: CV speed vs gyro magnitude   smoothing: 3 samples
+repeated CV rows (stale camera frames): 677 of 1535 (44.1%) -> interpolated
+lag resolution: one sample = 50.0 ms (sub-sample values are interpolated estimates)
+
+==============================================================================
+SPIKE DETECTION AND MATCHING
+==============================================================================
+IMU spikes found: 20    CV spikes found: 88    matched pairs: 17
+coarse lag used for matching (from cross-correlation): 0 samples; match window +/-0.25 s
+unmatched IMU spikes: 3    unmatched CV spikes: 71
+
+==============================================================================
+PER-SPIKE LAG  (ms, +ve = CV later than IMU; half-height centroid timing)
+==============================================================================
+  # burst  t_imu(s)   t_cv(s)   lag(ms)  peak-sample lag
+  1     1     5.461     5.387     -74.1              -50
+  2     1     6.360     6.188    -172.0             -150
+  3     2    14.269    14.080    -188.9             -200
+  4     2    15.217    15.377    +159.3             +250
+  5     3    24.706    24.583    -122.5             -100
+  6     4    31.961    32.178    +217.1             +250
+  7     5    37.433    37.398     -35.5              -50
+  8     5    38.372    38.080    -291.7             -250
+  9     6    43.546    43.380    -166.1             -150
+ 10     6    44.418    44.572    +153.8             +200
+ 11     7    49.376    49.396     +19.7               +0
+ 12     7    50.188    50.187      -1.7               +0
+ 13     8    54.725    54.582    -142.8             -100
+ 14     8    55.583    55.382    -200.2             -150
+ 15     9    61.390    61.474     +84.3              +50
+ 16     9    62.251    62.307     +55.6             +100
+ 17    10    69.503    69.659    +156.1             +150
+
+==============================================================================
+SUMMARY  (sample period = 50.0 ms)
+==============================================================================
+spike lag      : median -35.5 ms  (95% bootstrap CI -166.1 to +84.3)   mean -32.3   std 152.8   range -292 to +217
+cross-corr lag : +12.8 ms  (whole record, sub-sample interpolated)
+correlation    : 0.185 with no shift  ->  0.190 after shifting CV back by 13 ms
+
+PER MOTION BURST
+burst  from(s)    to(s)  spikes  spike median(ms)  xcorr(ms)
+    1      4.4      7.4       2            -123.1      -57.8
+    2     13.1     16.4       2             -14.8     +264.9
+    3     23.6     25.7       1            -122.5     -500.0
+    4     31.0     33.2       1            +217.1     +297.6
+    5     36.4     39.4       2            -163.6      -18.1
+    6     42.4     45.6       2              -6.1     -154.3
+    7     48.4     51.2       2              +9.0      +27.5
+    8     53.6     56.5       2            -171.5     -117.5
+    9     60.4     63.3       2             +69.9      +81.8
+   10     68.5     70.7       1            +156.1     +102.4
+per-burst cross-correlation lags differ by 798 ms
+
+INDEPENDENT CHECK: integrated gyro angle vs CV position (CV data is not differentiated)
+best pair      : gyro-z angle vs cv_0_x (sign +)  ->  CV lag +119.2 ms
+correlation    : 0.775 with no shift  ->  0.861 at the best lag
+other pairs    : gyro-x/cv_x +125 ms (r=0.83); gyro-z/cv_z +67 ms (r=0.81); gyro-x/cv_z +73 ms (r=0.81)
+per burst      : burst 1: +118 ms, burst 2: +137 ms, burst 3: +61 ms, burst 4: +86 ms, burst 5: +103 ms, burst 6: +105 ms, burst 7: +111 ms, burst 8: +127 ms, burst 9: +102 ms, burst 10: +149 ms
+
+==============================================================================
+VERDICT: SYNCHRONISED   (tolerance +/-50 ms)
+  - lag estimates: spike median -36 ms; speed cross-correlation +13 ms; angle-vs-position cross-correlation +119 ms  ->  best estimate (median of methods) +13 ms
+  - the methods differ by 155 ms (more than one sample), so treat the delay as a range of -36 to +119 ms
+==============================================================================
+
+Results written to: D:\Myfiles\github\Mocap-project\data_collection\Test\cv_imu_sync_test\cv_imu_results

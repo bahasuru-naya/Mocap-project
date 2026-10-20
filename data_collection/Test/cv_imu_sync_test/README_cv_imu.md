@@ -26,8 +26,8 @@ pip install numpy pandas scipy matplotlib
 ## 3. Usage
 
 ```bash
-python3 cv_imu_sync_check.py test_20261019-154647.csv
-python3 cv_imu_sync_check.py --selftest        # proves the method on synthetic data with known delays
+python cv_imu_sync_check.py test_20261020-214405.csv
+python cv_imu_sync_check.py --selftest        # proves the method on synthetic data with known delays
 ```
 
 | Option | Default | Meaning |

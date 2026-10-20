@@ -28,7 +28,7 @@ pip install numpy pandas scipy matplotlib
 ## 3. Usage
 
 ```bash
-python3 imu_sync_check.py testsync_20261019-162451.csv
+python imu_sync_check.py testsync_20261019-162451.csv
 ```
 
 Useful options:
