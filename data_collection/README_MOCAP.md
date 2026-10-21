@@ -34,7 +34,7 @@ python src/app_main.py
 ```
 
 ### Dashboard Usage
-- **Calibration:** Before starting a recording, place all IMUs flat and stationary, and click "Calibrate All Sensors". Wait for the status indicator on each node to turn Blue ("CALIBRATED"). This will cancel out gyroscope drift and zero out the accelerometer offset.
+- **Calibration:** Before starting a recording, place all IMUs flat and stationary, and click "Calibrate All Sensors". Wait for the status indicator on each node to turn Blue ("CALIBRATED"). 
 - **Recording:** Enter a session name and click "Start Recording".
 - **Synchronization Monitor:** The saved dataset is aligned to a 20 Hz timeline (one row every 50 ms) after recording stops. "Live Readout Rate" reports dashboard telemetry updates only; it is not a synchronized data rate or the saved dataset sampling rate.
 - **Packet-loss reporting:** The saved-dataset summary reports IMU sequence-number gaps separately from blank values remaining after 20 Hz resampling. The firmware increments its 16-bit sequence number once per transmitted packet. Gaps between received sequence numbers indicate missing notifications, but timer ticks coalesced while the firmware loop is busy are not reflected in the counter. Sequence numbers wrap, and gaps cannot identify a packet lost after the final received packet or determine every cause of a missing notification.
