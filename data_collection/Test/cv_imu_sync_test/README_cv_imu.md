@@ -26,7 +26,7 @@ pip install numpy pandas scipy matplotlib
 ## 3. Usage
 
 ```bash
-python cv_imu_sync_check.py test_20261020-214405.csv
+python cv_imu_sync_check.py cv_imu_sync_20261021-181312.csv
 python cv_imu_sync_check.py --selftest        # proves the method on synthetic data with known delays
 ```
 
@@ -119,29 +119,4 @@ script builds like-for-like signals:
   clock drift over time.
 - Spikes only exist during motion; the still periods carry no timing information.
 
-## 8. Results for `test_20261019-154647.csv`
 
-- 865 rows, 43.2 s, 20 Hz (50.00 ms step, no gaps, no NaNs). 37 CV rows (4.3 %) were repeated frames and
-  were interpolated.
-- 3 motion bursts (about 4-12 s, 17-31 s, 37-43 s). 35 IMU spikes and 32 CV spikes were found; 32 were
-  matched.
-
-| Method | CV lag vs IMU 1 |
-|---|---|
-| Spike median (95 % CI +105 to +197 ms) | +147 ms |
-| Cross-correlation of CV speed and gyro magnitude | +180 ms |
-| Integrated gyro angle vs `cv_0_y` position (r = 0.71 -> 0.96) | +166 ms |
-
-- Per burst (angle check): +159, +173, +157 ms. The delay is stable, like a constant latency.
-- Verdict: **NOT SYNCHRONISED.** CV is delayed by about **166 ms** (range 147-180 ms) relative to IMU 1,
-  much more than the 50 ms (one sample) tolerance.
-- Suggested fix: shift the CV data 3 samples (150 ms) earlier, or the IMU data 3 samples later.
-
-Robustness: changing the smoothing (1, 3, 5 samples), the spike prominence (0.15-0.35) and the stale-frame
-handling moved the cross-correlation lag only between 176 and 184 ms.
-
-## 9. Self-test
-
-`python3 cv_imu_sync_check.py --selftest` builds synthetic head swings with a known CV delay (+160, 0 and
--60 ms) and 4 % repeated frames, and checks that all three methods recover the delay to within 25 ms
-(they currently agree to about 2 ms). It also fixes the sign convention: positive means CV is delayed.

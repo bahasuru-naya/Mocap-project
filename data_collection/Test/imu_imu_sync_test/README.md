@@ -28,7 +28,7 @@ pip install numpy pandas scipy matplotlib
 ## 3. Usage
 
 ```bash
-python imu_sync_check.py testsync_20261019-162451.csv
+python imu_sync_check.py imu_imu_sync_20261021-190651.csv
 ```
 
 Useful options:
@@ -106,13 +106,4 @@ Exit code is `0` if SYNCHRONISED, `2` otherwise.
   minute. For a real clock-drift test, record 10 minutes or more with periodic shakes.
 - **Stationary periods** contain no information. Lag can only be measured at spikes.
 
-## 8. Results for `testsync_20261019-162451.csv`
 
-- 910 rows, 45.45 s, 20 Hz (50.00 ms step, no gaps, no NaNs), 5 IMUs.
-- 14 spikes (7 move/stop cycles) found in **every** IMU; all 14 matched across all 5 IMUs.
-- Lag vs IMU 1 (ms): median between -2.6 and -1.0 for IMUs 2-5; worst single spike +26.8 ms.
-- Cross-correlation lag vs IMU 1: -3.1, -2.0, -2.1, -2.9 ms (IMUs 2-5).
-- Largest spike-time spread between earliest and latest IMU: 26.8 ms (median 12.1 ms).
-- Verdict: **SYNCHRONISED** within the 50 ms (1 sample) resolution of the recording.
-
-Full numbers: `results/sync_log.txt`.

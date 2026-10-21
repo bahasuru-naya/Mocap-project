@@ -37,25 +37,17 @@ def main():
 
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-    # The ensemble: 3 ONNX models (one per training seed), averaged at inference.
+    # Self-contained ONNX model with folded scalers:
+    # No scalers, no scikit-learn, no TensorFlow. Only onnxruntime and numpy.
     # Inference device. Tiny models often run as fast (or faster) on CPU than on a GPU
     # because of host<->GPU copies. Flip this and compare the FPS / latency on the dashboard.
     PREFER_GPU = False
 
-    N_MODELS = 3
-    MODEL_PATHS = [
-        os.path.join(BASE_DIR, "model", f"best_model_overall_member{i}.onnx")
-        for i in range(N_MODELS)
-    ]
-    IMU_SCALER_PATH  = os.path.join(BASE_DIR, "scalers", "imu_scaler.onnx")
-    POSE_SCALER_PATH = os.path.join(BASE_DIR, "scalers", "pose_scaler.onnx")
+    MODEL_PATH = os.path.join(BASE_DIR, "model", "best_model_overall_with_scalers.onnx")
 
-    missing = [p for p in MODEL_PATHS + [IMU_SCALER_PATH, POSE_SCALER_PATH] if not os.path.exists(p)]
-    if missing:
-        print("[ERROR] Missing file(s):")
-        for p in missing:
-            print("   ", p)
-        print("Run src/convert_model_to_onnx.py to create the .onnx models and scalers.")
+    if not os.path.exists(MODEL_PATH):
+        print("[ERROR] Missing model file:")
+        print("   ", MODEL_PATH)
         sys.exit(1)
 
     # ------------------------------------------------------------------ #
@@ -84,10 +76,10 @@ def main():
         ble_data_queue, sync_queue, TARGET_DEVICES
     )
 
-    print(f"[Main] Starting prediction engine (loading {N_MODELS} models)...")
+    print(f"[Main] Starting prediction engine (loading self-contained ONNX model)...")
     prediction_engine = PredictionEngine(
         sync_queue, pose_queue,
-        MODEL_PATHS, IMU_SCALER_PATH, POSE_SCALER_PATH,
+        model_path=MODEL_PATH,
         prefer_gpu=PREFER_GPU,
     )
 

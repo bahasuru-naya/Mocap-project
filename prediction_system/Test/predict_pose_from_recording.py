@@ -10,7 +10,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 PREDICTION_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PREDICTION_ROOT / "src"))
@@ -18,8 +17,10 @@ sys.path.insert(0, str(PREDICTION_ROOT / "src"))
 from system.prediction_engine import (
     IMU_COLS,
     POSE_COLS,
+    PosePredictor,
     PoseEnsemble,
 )
+from system.dashboard import SKELETON_CONNECTIONS
 
 SAMPLE_PERIOD_SECONDS = 0.05
 SAMPLE_PERIOD_TOLERANCE_SECONDS = 0.002
@@ -182,8 +183,15 @@ def compute_accuracy_metrics(y_true, y_pred, pck_thresholds=(0.05, 0.10)):
     n_samples = len(y_true)
     flat_true = y_true.reshape(n_samples, 51)
     flat_pred = y_pred.reshape(n_samples, 51)
-    r2_vw = float(r2_score(flat_true, flat_pred, multioutput="variance_weighted"))
-    r2_uni = float(r2_score(flat_true, flat_pred, multioutput="uniform_average"))
+
+    # Pure NumPy R2 calculation (variance weighted & uniform average)
+    ss_res = np.sum((flat_true - flat_pred) ** 2, axis=0)
+    ss_tot = np.sum((flat_true - np.mean(flat_true, axis=0)) ** 2, axis=0)
+    ss_tot_safe = np.maximum(ss_tot, 1e-12)
+    r2_per_col = np.where(ss_tot > 1e-12, 1.0 - (ss_res / ss_tot_safe), 0.0)
+
+    r2_vw = float(1.0 - np.sum(ss_res) / np.maximum(np.sum(ss_tot), 1e-12))
+    r2_uni = float(np.mean(r2_per_col))
 
     return {
         "samples": n_samples,
@@ -224,12 +232,16 @@ def evaluate_dataset(
 
     n_predictions = n_rows - window_size + 1
 
-    # Run inference across windows using direct numpy slices for speed
+    # Run inference across windows (using batch inference if available for speed)
     t0 = time.perf_counter()
-    predictions = np.empty((n_predictions, 17, 3), dtype=np.float32)
-    for idx, end_index in enumerate(range(window_size - 1, n_rows)):
-        window = features[end_index - window_size + 1 : end_index + 1]
-        predictions[idx] = predictor.predict_window(window)
+    if hasattr(predictor, "predict_batch"):
+        windows = np.stack([features[i : i + window_size] for i in range(n_predictions)])
+        predictions = predictor.predict_batch(windows)
+    else:
+        predictions = np.empty((n_predictions, 17, 3), dtype=np.float32)
+        for idx, end_index in enumerate(range(window_size - 1, n_rows)):
+            window = features[end_index - window_size + 1 : end_index + 1]
+            predictions[idx] = predictor.predict_window(window)
     infer_time = time.perf_counter() - t0
     fps = n_predictions / infer_time if infer_time > 0 else 0.0
 
@@ -498,6 +510,106 @@ def export_summary_csv(results, pooled_metrics, output_csv_path, pck_thresholds=
     print(f"Summary metrics exported to: {output_csv_path}")
 
 
+def visualize_recording_motion(res, save_animation_path=None, interactive=True, max_frames=300):
+    """Render 3-D animated visualization of predicted vs ground-truth motion in upright metric space."""
+    import matplotlib.pyplot as plt
+    import matplotlib.animation as animation
+
+    preds = res.get("predictions")
+    gts = res.get("gt_poses")
+    if preds is None or len(preds) == 0:
+        print("  [Notice] No predictions available to visualize.")
+        return
+
+    n_frames = min(len(preds), max_frames)
+    has_gt = gts is not None and len(gts) >= n_frames
+
+    fig = plt.figure(figsize=(12, 6) if has_gt else (7, 6), facecolor="#121212")
+
+    if has_gt:
+        ax_gt = fig.add_subplot(121, projection="3d", facecolor="#1e1e1e")
+        ax_pred = fig.add_subplot(122, projection="3d", facecolor="#1e1e1e")
+        axes = [ax_gt, ax_pred]
+        titles = ["Ground Truth Pose", f"Predicted Pose ({res['dataset_name']})"]
+    else:
+        ax_pred = fig.add_subplot(111, projection="3d", facecolor="#1e1e1e")
+        axes = [ax_pred]
+        titles = [f"Predicted Pose ({res['dataset_name']})"]
+
+    for ax, title in zip(axes, titles):
+        ax.set_xlim(-0.9, 0.9)
+        ax.set_ylim(-0.9, 0.9)
+        ax.set_zlim(-1.05, 0.75)
+        try:
+            ax.set_box_aspect([1, 1, 1])
+        except AttributeError:
+            pass
+        ax.view_init(elev=15, azim=-70)
+        ax.set_xlabel("X (Lateral, m)", color="#888888", fontsize=8)
+        ax.set_ylabel("Depth (m)", color="#888888", fontsize=8)
+        ax.set_zlabel("Height (m)", color="#888888", fontsize=8)
+        for axis_obj in [ax.xaxis, ax.yaxis, ax.zaxis]:
+            axis_obj.set_tick_params(colors="#666666", labelsize=7)
+            axis_obj.pane.fill = False
+            axis_obj.pane.set_edgecolor("#333333")
+        ax.grid(True, color="#333333", linewidth=0.5, alpha=0.6)
+        ax.set_title(title, color="#ffffff", fontsize=11, fontweight="bold")
+
+    def _draw_frame(ax, coords, body_color, head_color):
+        px = coords[:, 0]
+        py = coords[:, 2]
+        pz = coords[:, 1]
+        ax.scatter(px[1:], py[1:], pz[1:], color=body_color, s=40, depthshade=True)
+        ax.scatter([px[0]], [py[0]], [pz[0]], color=head_color, s=80, depthshade=True)
+        for a, b in SKELETON_CONNECTIONS:
+            ax.plot([px[a], px[b]], [py[a], py[b]], [pz[a], pz[b]], color=body_color, linewidth=2)
+        sm = (coords[1] + coords[2]) / 2.0
+        ax.plot([px[0], sm[0]], [py[0], sm[2]], [pz[0], sm[1]], color=head_color, linewidth=2.5)
+
+    def update(frame_idx):
+        for ax, title in zip(axes, titles):
+            elev = ax.elev
+            azim = ax.azim
+            ax.cla()
+            ax.set_xlim(-0.9, 0.9)
+            ax.set_ylim(-0.9, 0.9)
+            ax.set_zlim(-1.05, 0.75)
+            try:
+                ax.set_box_aspect([1, 1, 1])
+            except AttributeError:
+                pass
+            ax.view_init(elev=elev, azim=azim)
+            ax.set_xlabel("X (Lateral, m)", color="#888888", fontsize=8)
+            ax.set_ylabel("Depth (m)", color="#888888", fontsize=8)
+            ax.set_zlabel("Height (m)", color="#888888", fontsize=8)
+            for axis_obj in [ax.xaxis, ax.yaxis, ax.zaxis]:
+                axis_obj.set_tick_params(colors="#666666", labelsize=7)
+                axis_obj.pane.fill = False
+                axis_obj.pane.set_edgecolor("#333333")
+            ax.grid(True, color="#333333", linewidth=0.5, alpha=0.6)
+            ax.set_title(f"{title} (Frame {frame_idx}/{n_frames})", color="#ffffff", fontsize=10)
+
+        if has_gt:
+            _draw_frame(axes[0], gts[frame_idx], "#4caf50", "#2196f3")
+            _draw_frame(axes[1], preds[frame_idx], "#03dac6", "#448aff")
+        else:
+            _draw_frame(axes[0], preds[frame_idx], "#03dac6", "#448aff")
+
+    anim = animation.FuncAnimation(fig, update, frames=n_frames, interval=50, blit=False)
+
+    if save_animation_path:
+        out_anim = Path(save_animation_path).expanduser().resolve()
+        out_anim.parent.mkdir(parents=True, exist_ok=True)
+        print(f"  [Output] Saving animation to: {out_anim} ...")
+        anim.save(str(out_anim), writer=animation.PillowWriter(fps=20))
+        print(f"  [Output] Animation saved successfully.")
+
+    if interactive:
+        plt.show()
+    else:
+        plt.close(fig)
+
+
 def main():
     default_recordings_dir = (PREDICTION_ROOT.parent / "data_collection" / "recordings").resolve()
 
@@ -533,21 +645,37 @@ def main():
         help="Path to export accuracy summary comparison as CSV.",
     )
     parser.add_argument(
+        "--model",
+        type=Path,
+        default=PREDICTION_ROOT / "model" / "best_model_overall_with_scalers.onnx",
+        help="Path to self-contained ONNX model with embedded scalers (default: prediction_system/model/best_model_overall_with_scalers.onnx).",
+    )
+    parser.add_argument(
         "--models-dir",
         type=Path,
-        default=PREDICTION_ROOT / "model",
-        help="Directory containing ONNX model files (default: prediction_system/model).",
+        default=None,
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--scalers-dir",
         type=Path,
-        default=PREDICTION_ROOT / "scalers",
-        help="Directory containing scaler ONNX files (default: prediction_system/scalers).",
+        default=None,
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--prefer-gpu",
         action="store_true",
         help="Prefer GPU acceleration (DirectML / CUDA) if available.",
+    )
+    parser.add_argument(
+        "--visualize",
+        action="store_true",
+        help="Display an interactive 3-D animated visualization of predicted motion.",
+    )
+    parser.add_argument(
+        "--save-animation",
+        type=Path,
+        help="Path to save animated GIF of 3-D skeleton motion (e.g. motion.gif).",
     )
 
     args = parser.parse_args()
@@ -585,33 +713,26 @@ def main():
     else:
         parser.error(f"Invalid input path: {input_path}")
 
-    # Validate ONNX model and scaler files
-    model_paths = [
-        str(args.models_dir / f"best_model_overall_member{i}.onnx")
-        for i in range(3)
-    ]
-    imu_scaler_path = str(args.scalers_dir / "imu_scaler.onnx")
-    pose_scaler_path = str(args.scalers_dir / "pose_scaler.onnx")
-
-    missing_files = [
-        p for p in (*model_paths, imu_scaler_path, pose_scaler_path)
-        if not os.path.isfile(p)
-    ]
-    if missing_files:
-        parser.error(
-            "Missing ONNX file(s):\n  " + "\n  ".join(missing_files)
-            + "\nRun src/convert_model_to_onnx.py first to generate ONNX files."
-        )
+    # Resolve ONNX model path
+    model_path = args.model
+    if not model_path.is_file():
+        if args.models_dir and (args.models_dir / "best_model_overall_with_scalers.onnx").is_file():
+            model_path = args.models_dir / "best_model_overall_with_scalers.onnx"
+        else:
+            parser.error(
+                f"Missing ONNX model file:\n  {model_path}\n"
+                "Ensure 'best_model_overall_with_scalers.onnx' exists in 'prediction_system/model/'."
+            )
 
     # Initialize predictor
-    print("\n[Accuracy Check] Initializing PoseEnsemble predictor...")
+    print("\n[Accuracy Check] Initializing PosePredictor (self-contained ONNX model)...")
     try:
-        predictor = PoseEnsemble(
-            model_paths,
-            imu_scaler_path,
-            pose_scaler_path,
+        predictor = PosePredictor(
+            str(model_path),
             prefer_gpu=args.prefer_gpu,
         )
+    except Exception as e:
+        parser.error(f"Failed to initialize PosePredictor: {e}")
     except Exception as e:
         parser.error(f"Failed to initialize PoseEnsemble: {e}")
 
@@ -657,6 +778,14 @@ def main():
         # Save a default summary next to the input directory or in PREDICTION_ROOT/Test
         default_summary = PREDICTION_ROOT / "Test" / "accuracy_summary.csv"
         export_summary_csv(results, pooled_metrics, default_summary, pck_thresholds=pck_thresholds)
+
+    # Visualize or save animation if requested
+    if (args.visualize or args.save_animation) and results:
+        visualize_recording_motion(
+            results[0],
+            save_animation_path=args.save_animation,
+            interactive=args.visualize,
+        )
 
 
 if __name__ == "__main__":

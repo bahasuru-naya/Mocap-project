@@ -1,14 +1,8 @@
-onnxruntime==1.19.2
-scikit-learn==1.6.1
-joblib
+# Realtime Motion Prediction System dependencies
+# Self-contained ONNX inference: No scalers, no scikit-learn, no TensorFlow. Only onnxruntime and numpy:
+onnxruntime>=1.19.0
 numpy
 pandas
 bleak
 PyQt5
 matplotlib
-tensorflow
-tf2onnx
-
-# For one-time model conversion only (not needed at runtime):
-# tensorflow>=2.15.0
-# tf2onnx>=1.16.0

@@ -1,4 +1,5 @@
 import asyncio
+import queue
 import struct
 import threading
 import time
@@ -15,6 +16,7 @@ class BLEThread(threading.Thread):
         self.clients = {}
         self.loop = None
         self.connect_lock = None
+        self.gatt_write_lock = None
         self.daemon = True
         self.CHARACTERISTIC_UUID_TX = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
         self.CHARACTERISTIC_UUID_RX = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
@@ -30,6 +32,7 @@ class BLEThread(threading.Thread):
     async def main_task(self):
         # Serialize scan/connect so one device reconnecting does not disturb the others' streams
         self.connect_lock = asyncio.Lock()
+        self.gatt_write_lock = asyncio.Lock()
         # Create connection task for each device
         tasks = [self.connect_to_device(name) for name in self.target_devices]
         
@@ -53,7 +56,19 @@ class BLEThread(threading.Thread):
                                 print(f"Sending CALIBRATE to {device_name} (Attempt {attempt+1})")
                                 # Use response=False to prevent the PC from waiting for an ACK.
                                 # This avoids the "Unreachable" errors caused by the BLE channel being busy.
-                                await client.write_gatt_char(self.CHARACTERISTIC_UUID_RX, b"CALIBRATE", response=False)
+                                if self.gatt_write_lock is None:
+                                    await client.write_gatt_char(
+                                        self.CHARACTERISTIC_UUID_RX,
+                                        b"CALIBRATE",
+                                        response=False,
+                                    )
+                                else:
+                                    async with self.gatt_write_lock:
+                                        await client.write_gatt_char(
+                                            self.CHARACTERISTIC_UUID_RX,
+                                            b"CALIBRATE",
+                                            response=False,
+                                        )
                                 print(f"Successfully sent CALIBRATE to {device_name}")
                                 break # Exit retry loop on success
                             except Exception as e:
@@ -65,47 +80,114 @@ class BLEThread(threading.Thread):
             await asyncio.sleep(0.1)
 
     def notification_handler(self, device_name):
-        # Closure to capture device_name
-        def handler(sender, data: bytearray):
+        buffer = bytearray()
+        last_frame_warning = 0.0
+
+        def parse_sample(raw_line):
+            line = raw_line.decode('utf-8').strip()
+            if line == "CALIB_DONE":
+                return None
+
+            values = line.split(',')
+            if len(values) != 7:
+                raise ValueError(f"expected 7 fields, received {len(values)}")
+
+            node_time = int(values[0])
+            return make_sensor_data({
+                'node_id': device_name,
+                'node_time': node_time,
+                'ax': float(values[1]), 'ay': float(values[2]), 'az': float(values[3]),
+                'gx': float(values[4]), 'gy': float(values[5]), 'gz': float(values[6])
+            })
+
+        def make_sensor_data(sensor_data):
+            arrival_time = time.monotonic()
+            sensor_data.update({
+                'sys_time': time.time(),
+                'sync_time': arrival_time,
+                'arrival_sync_time': arrival_time,
+            })
+            return sensor_data
+
+        def report_framing_error(detail):
+            nonlocal last_frame_warning
+            now = time.monotonic()
+            if now - last_frame_warning >= 5.0:
+                print(
+                    f"BLE framing error from {device_name}: {detail}. "
+                    "Reflash this node with the updated IMU firmware; "
+                    "incomplete samples cannot be recovered."
+                )
+                last_frame_warning = now
+
+        def enqueue_sample(sensor_data):
             try:
-                if data[:2] == b'IM':
-                    if len(data) != 20:
-                        raise ValueError(f"expected 20-byte binary sample, received {len(data)}")
-                    _, sequence, node_time, ax, ay, az, gx, gy, gz = struct.unpack(
-                        '<2sHI6h', data
+                self.data_queue.put_nowait(sensor_data)
+            except queue.Full:
+                print(f"BLE data queue full; dropped packet from {device_name}")
+
+        def process_line(raw_line):
+            if not raw_line.strip():
+                return
+            if raw_line.strip() == b"CALIB_DONE":
+                self.status_queue.put({'device': device_name, 'status': 'calibrated'})
+                return
+
+            try:
+                sensor_data = parse_sample(raw_line)
+            except (UnicodeDecodeError, ValueError) as e:
+                report_framing_error(f"invalid sample ({e})")
+                return
+
+            enqueue_sample(sensor_data)
+
+        def handler(sender, data: bytearray):
+            nonlocal last_frame_warning
+
+            if data[:2] == b'IM':
+                if len(data) != 20:
+                    report_framing_error(
+                        f"binary sample has {len(data)} bytes instead of 20"
                     )
-                    sensor_data = {
-                        'node_id': device_name,
-                        'sys_time': time.time(),
-                        'sync_time': time.monotonic(),
-                        'node_time': node_time,
-                        'sample_sequence': sequence,
-                        'ax': ax / 1000.0, 'ay': ay / 1000.0, 'az': az / 1000.0,
-                        'gx': gx / 100.0, 'gy': gy / 100.0, 'gz': gz / 100.0
-                    }
-                    self.data_queue.put(sensor_data)
+                    return
+                _, sequence, node_time, ax, ay, az, gx, gy, gz = struct.unpack(
+                    '<2sHI6h', data
+                )
+                enqueue_sample(make_sensor_data({
+                    'node_id': device_name,
+                    'node_time': node_time,
+                    'sample_sequence': sequence,
+                    'ax': ax / 1000.0, 'ay': ay / 1000.0, 'az': az / 1000.0,
+                    'gx': gx / 100.0, 'gy': gy / 100.0, 'gz': gz / 100.0
+                }))
+                return
+
+            if b'\n' not in data and b',' in data:
+                try:
+                    legacy_sample = parse_sample(data)
+                except (UnicodeDecodeError, ValueError):
+                    legacy_sample = False
+                if legacy_sample:
+                    enqueue_sample(legacy_sample)
                     return
 
-                line = data.decode('utf-8').strip()
-                if line == "CALIB_DONE":
-                    self.status_queue.put({'device': device_name, 'status': 'calibrated'})
-                    return
-                    
-                values = line.split(',')
-                if len(values) >= 7:
-                    sensor_data = {
-                        'node_id': device_name,
-                        'sys_time': time.time(),
-                        'sync_time': time.monotonic(),
-                        'node_time': int(values[0]),
-                        'ax': float(values[1]), 'ay': float(values[2]), 'az': float(values[3]),
-                        'gx': float(values[4]), 'gy': float(values[5]), 'gz': float(values[6])
-                    }
-                    if not self.data_queue.full():
-                        self.data_queue.put(sensor_data)
-            except Exception as e:
-                # ignore malformed packets
-                pass
+            if data == b"CALIB_DONE":
+                process_line(data)
+                return
+
+            buffer.extend(data)
+            while True:
+                newline_index = buffer.find(b'\n')
+                if newline_index < 0:
+                    break
+                raw_line, _, remainder = buffer.partition(b'\n')
+                buffer[:] = remainder
+                process_line(raw_line)
+
+            if len(buffer) > 256:
+                buffer.clear()
+                report_framing_error("no complete newline-terminated sample received")
+
         return handler
 
     async def connect_to_device(self, device_name):
@@ -134,7 +216,7 @@ class BLEThread(threading.Thread):
                 # Stream outside the lock
                 if client:
                     while client.is_connected and self.running:
-                        await asyncio.sleep(1.0)
+                        await asyncio.sleep(0.1)
             except Exception as e:
                 print(f"BLE error {device_name}: {e}")
                 self.status_queue.put({'device': device_name, 'status': 'error'})

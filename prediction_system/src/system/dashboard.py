@@ -3,17 +3,22 @@ Dashboard — PyQt5 main window with a rotatable 3-D skeleton viewport
 and live sensor-status panel for the realtime motion prediction system.
 """
 
+import os
+import queue
+import time
+import numpy as np
+import pandas as pd
+
 from PyQt5.QtWidgets import *
 from PyQt5.QtCore import *
 from PyQt5.QtGui import *
-
-import numpy as np
-import os
 
 # Matplotlib 3-D canvas embedded in PyQt5
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401  (registers 3-D projection)
+
+from system.prediction_engine import IMU_COLS, POSE_COLS
 
 
 # ====================================================================== #
@@ -78,9 +83,9 @@ class CalibrationDialog(QDialog):
         self.img_label.setAlignment(Qt.AlignCenter)
 
         image_path = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
-        "img",
-        "Sensor_position.png"
+            os.path.dirname(os.path.abspath(__file__)),
+            "img",
+            "Sensor_position.png"
         )
         
         pixmap = QPixmap(image_path)
@@ -106,7 +111,6 @@ class CalibrationDialog(QDialog):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_timer)
         self.timer.start(1000)        
-    
 
     def update_timer(self):
         self.countdown -= 1
@@ -124,38 +128,70 @@ class Skeleton3DCanvas(FigureCanvas):
     """
     A Matplotlib FigureCanvas that renders the 17-joint skeleton in a
     rotatable / zoomable 3-D viewport.
+
+    Upright Coordinate Mapping:
+      plot_x = coords[:, 0]  (Lateral: Left/Right, MediaPipe X)
+      plot_y = coords[:, 2]  (Depth: Front/Back, MediaPipe Z)
+      plot_z = coords[:, 1]  (Height: Up/Down, MediaPipe -Y from cv_module)
+
+    This aligns the human body upright along Matplotlib's vertical Z axis.
+    Fixed isotropic spatial bounds (1.8m span on all axes) and set_box_aspect([1, 1, 1])
+    guarantee that bone lengths and body proportions remain 100% physically accurate
+    and never rubber-band or distort during motion. Persistent artist updates avoid
+    calling cla(), eliminating screen flicker and preserving smooth mouse rotation.
     """
 
-    def __init__(self, parent=None, width=36, height=32, dpi=200):
-        self.fig = Figure(figsize=(width, height), dpi=dpi,
-                          facecolor='#121212')
+    def __init__(self, parent=None, width=9, height=7, dpi=100):
+        self.fig = Figure(figsize=(width, height), dpi=dpi, facecolor='#121212')
         super().__init__(self.fig)
         self.setParent(parent)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
-        self.ax = self.fig.add_subplot(111, projection='3d',
-                                        facecolor='#1e1e1e')
+        self.ax = self.fig.add_subplot(111, projection='3d', facecolor='#1e1e1e')
+        self._default_elev = 15
+        self._default_azim = -70
         self._style_axes()
 
-        # Default viewpoint
-        self.ax.view_init(elev=110, azim=-90)
-        
+        # Fixed isotropic metric viewport (1.8 m span on all 3 axes: X, Y, Z)
+        self._span = 0.9
+        self.ax.set_xlim(-self._span, self._span)
+        self.ax.set_ylim(-self._span, self._span)
+        self.ax.set_zlim(-1.05, 0.75)
+        try:
+            self.ax.set_box_aspect([1, 1, 1])
+        except AttributeError:
+            pass
 
-        # Smoothed axis limits (prevent jitter)
-        self._axis_limits = None
-        self._alpha = 0.3          # EMA smoothing factor
+        self.ax.view_init(elev=self._default_elev, azim=self._default_azim)
+
+        # Persistent visual artists (initialized empty to avoid cla() re-creation)
+        self._body_scatter = self.ax.scatter(
+            [], [], [], color='#03dac6', s=50, depthshade=True, zorder=5
+        )
+        self._head_scatter = self.ax.scatter(
+            [], [], [], color='#448aff', s=100, depthshade=True, zorder=6
+        )
+        self._bone_lines = [
+            self.ax.plot([], [], [], color='#03dac6', linewidth=2.5, zorder=4)[0]
+            for _ in SKELETON_CONNECTIONS
+        ]
+        self._neck_line = self.ax.plot(
+            [], [], [], color='#448aff', linewidth=3.0, zorder=4
+        )[0]
 
         # Draw an initial "waiting" message
-        self.ax.text(0, 0, 0, "Waiting for data...",
-                     color='#777777', fontsize=14, ha='center')
+        self._waiting_text = self.ax.text(
+            0, 0, 0, "Waiting for data...",
+            color='#777777', fontsize=14, ha='center', zorder=10
+        )
         self.draw_idle()
 
     # ------------------------------------------------------------------ #
     def _style_axes(self):
         ax = self.ax
-        ax.set_xlabel("X", color='#888888', fontsize=10)
-        ax.set_ylabel("Y", color='#888888', fontsize=10)
-        ax.set_zlabel("Z", color='#888888', fontsize=10)
+        ax.set_xlabel("X (Lateral, m)", color='#888888', fontsize=9, labelpad=8)
+        ax.set_ylabel("Depth (m)", color='#888888', fontsize=9, labelpad=8)
+        ax.set_zlabel("Height (m)", color='#888888', fontsize=9, labelpad=8)
 
         # Tick & pane colours
         for axis_obj in [ax.xaxis, ax.yaxis, ax.zaxis]:
@@ -165,78 +201,58 @@ class Skeleton3DCanvas(FigureCanvas):
 
         ax.grid(True, color='#333333', linewidth=0.5, alpha=0.6)
 
+    def set_view(self, elev, azim):
+        """Set camera perspective without resetting visual artists."""
+        self.ax.view_init(elev=elev, azim=azim)
+        self.draw_idle()
+
+    def reset_view(self):
+        self.set_view(self._default_elev, self._default_azim)
+
     # ------------------------------------------------------------------ #
     def update_skeleton(self, coords):
         """
-        Redraw the skeleton with new *coords* — a (17, 3) numpy array
-        of ``[x, y, z]`` per joint.
-
-        The current camera view (elevation / azimuth) is preserved across
-        redraws so the user's rotation is not lost.
+        Update skeleton joint and bone positions with new (17, 3) coordinates.
+        Preserves camera angle and mouse drag state.
         """
-        # Preserve current view angle
-        elev = self.ax.elev
-        azim = self.ax.azim
+        if coords is None or len(coords) != 17:
+            return
+        coords = np.asarray(coords, dtype=np.float32)
+        if not np.all(np.isfinite(coords)):
+            return
 
-        self.ax.cla()
-        self._style_axes()
+        # Hide initial waiting text if present
+        if self._waiting_text is not None and self._waiting_text.get_visible():
+            self._waiting_text.set_visible(False)
 
-        x, y, z = coords[:, 0], coords[:, 1], coords[:, 2]
+        # Coordinate transformation:
+        # In MediaPipe world coordinates:
+        #   coords[:, 0] = Lateral X (left is positive, right is negative)
+        #   coords[:, 1] = Vertical Y (head is positive, feet are negative)
+        #   coords[:, 2] = Depth Z
+        # In Matplotlib 3D:
+        #   X = Lateral, Y = Depth, Z = Vertical Height
+        px = coords[:, 0]
+        py = coords[:, 2]
+        pz = coords[:, 1]
 
-        # ---- Draw body joints (indices 1-16) ---- #
-        self.ax.scatter(
-            x[1:], y[1:], z[1:],
-            color='#03dac6', s=50, depthshade=True, zorder=5,
-        )
+        # ---- Body joints (indices 1-16) ---- #
+        self._body_scatter._offsets3d = (px[1:], py[1:], pz[1:])
 
-        # ---- Draw head (index 0) in blue ---- #
-        self.ax.scatter(
-            [x[0]], [y[0]], [z[0]],
-            color='#448aff', s=100, depthshade=True, zorder=6,
-        )
+        # ---- Head (index 0) in blue ---- #
+        self._head_scatter._offsets3d = ([px[0]], [py[0]], [pz[0]])
 
-        # ---- Draw bones ---- #
-        for a, b in SKELETON_CONNECTIONS:
-            self.ax.plot(
-                [x[a], x[b]], [y[a], y[b]], [z[a], z[b]],
-                color='#03dac6', linewidth=2.5, zorder=4,
-            )
+        # ---- Bones ---- #
+        for i, (a, b) in enumerate(SKELETON_CONNECTIONS):
+            self._bone_lines[i].set_data([px[a], px[b]], [py[a], py[b]])
+            self._bone_lines[i].set_3d_properties([pz[a], pz[b]])
 
         # ---- Head → shoulder midpoint (neck) ---- #
-        shoulder_mid = (coords[1] + coords[2]) / 2.0
-        self.ax.plot(
-            [x[0], shoulder_mid[0]],
-            [y[0], shoulder_mid[1]],
-            [z[0], shoulder_mid[2]],
-            color='#448aff', linewidth=3, zorder=4,
-        )
-
-        # ---- Axis limits (smoothed to reduce jitter) ---- #
-        margin = 0.15
-        new_limits = np.array([
-            [x.min() - margin, x.max() + margin],
-            [y.min() - margin, y.max() + margin],
-            [z.min() - margin, z.max() + margin],
-        ])
-
-        if self._axis_limits is None:
-            self._axis_limits = new_limits
-        else:
-            a = self._alpha
-            self._axis_limits = a * new_limits + (1 - a) * self._axis_limits
-
-        self.ax.set_xlim(self._axis_limits[0])
-        self.ax.set_ylim(self._axis_limits[1])
-        self.ax.set_zlim(self._axis_limits[2])
-
-        # Equal aspect ratio
-        try:
-            self.ax.set_box_aspect([1, 1, 1])
-        except AttributeError:
-            pass  # older Matplotlib
-
-        # Restore camera view
-        self.ax.view_init(elev=elev, azim=azim)
+        sm_x = (coords[1, 0] + coords[2, 0]) / 2.0
+        sm_y = (coords[1, 2] + coords[2, 2]) / 2.0
+        sm_z = (coords[1, 1] + coords[2, 1]) / 2.0
+        self._neck_line.set_data([px[0], sm_x], [py[0], sm_y])
+        self._neck_line.set_3d_properties([pz[0], sm_z])
 
         self.draw_idle()
 
@@ -247,7 +263,6 @@ class Skeleton3DCanvas(FigureCanvas):
 class Dashboard(QMainWindow):
     """
     PyQt5 main window for the realtime motion prediction system.
-    
     """
 
     def __init__(self, ble_cmd_queue, sync_queue, pose_queue,
@@ -316,10 +331,47 @@ class Dashboard(QMainWindow):
 
         # ============ Left panel (3-D viewport + controls) ============ #
         left_panel = QVBoxLayout()
-        left_panel.setSpacing(15)
+        left_panel.setSpacing(10)
 
         # 3-D canvas
         self.canvas = Skeleton3DCanvas(self, width=9, height=7, dpi=100)
+
+        # Camera view quick presets bar
+        cam_bar = QHBoxLayout()
+        cam_bar.setSpacing(8)
+
+        lbl_cam = QLabel("Camera View:")
+        lbl_cam.setStyleSheet("color: #bb86fc; font-weight: bold; font-size: 13px;")
+        cam_bar.addWidget(lbl_cam)
+
+        btn_persp = QPushButton("Perspective")
+        btn_persp.setFixedHeight(30)
+        btn_persp.clicked.connect(lambda: self.canvas.set_view(15, -70))
+        cam_bar.addWidget(btn_persp)
+
+        btn_front = QPushButton("Front")
+        btn_front.setFixedHeight(30)
+        btn_front.clicked.connect(lambda: self.canvas.set_view(0, -90))
+        cam_bar.addWidget(btn_front)
+
+        btn_side = QPushButton("Side")
+        btn_side.setFixedHeight(30)
+        btn_side.clicked.connect(lambda: self.canvas.set_view(0, 0))
+        cam_bar.addWidget(btn_side)
+
+        btn_top = QPushButton("Top")
+        btn_top.setFixedHeight(30)
+        btn_top.clicked.connect(lambda: self.canvas.set_view(89, -90))
+        cam_bar.addWidget(btn_top)
+
+        btn_reset = QPushButton("Reset Camera")
+        btn_reset.setFixedHeight(30)
+        btn_reset.setStyleSheet("QPushButton { background-color: #2c3e50; }")
+        btn_reset.clicked.connect(self.canvas.reset_view)
+        cam_bar.addWidget(btn_reset)
+
+        cam_bar.addStretch()
+        left_panel.addLayout(cam_bar)
         left_panel.addWidget(self.canvas, stretch=1)
 
         # Controls bar
@@ -329,12 +381,12 @@ class Dashboard(QMainWindow):
         ctrl_group = QGroupBox("System Controls")
         ctrl_layout = QHBoxLayout()
         ctrl_layout.setContentsMargins(15, 15, 15, 15)
+        ctrl_layout.setSpacing(10)
 
         self.calib_btn = QPushButton("Calibrate All Sensors")
         self.calib_btn.setMinimumHeight(55)
-        self.calib_btn.setMaximumWidth(350)
         self.calib_btn.setStyleSheet("""
-            QPushButton       { background-color: #1f618d; font-size: 16px;  }
+            QPushButton       { background-color: #1f618d; font-size: 15px; }
             QPushButton:hover { background-color: #2980b9; }
         """)
         self.calib_btn.clicked.connect(self._start_calibration)
@@ -342,44 +394,42 @@ class Dashboard(QMainWindow):
 
         self.prediction_btn = QPushButton("Start Prediction")
         self.prediction_btn.setMinimumHeight(55)
-        self.prediction_btn.setMaximumWidth(350)
         self.prediction_btn.setStyleSheet("""
-            QPushButton       { background-color: #2e7d32; font-size: 16px; }
+            QPushButton       { background-color: #2e7d32; font-size: 15px; }
             QPushButton:hover { background-color: #388e3c; }
         """)
         self.prediction_btn.clicked.connect(self._toggle_prediction)
         ctrl_layout.addWidget(self.prediction_btn)
-        ctrl_group.setLayout(ctrl_layout)
-        controls_row.addWidget(ctrl_group)
 
-        ctrl_group_text = QGroupBox("System information")
+        ctrl_group.setLayout(ctrl_layout)
+        controls_row.addWidget(ctrl_group, stretch=5)
+
+        ctrl_group_text = QGroupBox("System Information")
         ctrl_layout_text = QHBoxLayout()
         ctrl_layout_text.setContentsMargins(15, 15, 15, 15)
         
-        
         self.pred_fps_label = QLabel("Prediction FPS: --")
         self.pred_fps_label.setStyleSheet(
-            "font-size: 20px; font-weight: bold; color: #b3b3b3;"
+            "font-size: 18px; font-weight: bold; color: #b3b3b3;"
         )
         ctrl_layout_text.addWidget(self.pred_fps_label)
 
         self.active_nodes_label = QLabel("Active Nodes: 0/5")
         self.active_nodes_label.setStyleSheet(
-            "font-size: 20px; font-weight: bold; color: #b3b3b3;"
+            "font-size: 18px; font-weight: bold; color: #b3b3b3;"
         )
         self.active_nodes_label.setAlignment(Qt.AlignCenter)
         ctrl_layout_text.addWidget(self.active_nodes_label)
 
         self.sync_fps_label = QLabel("Sync FPS: 0")
         self.sync_fps_label.setStyleSheet(
-            "font-size: 20px; font-weight: bold; color: #b3b3b3;"
+            "font-size: 18px; font-weight: bold; color: #b3b3b3;"
         )
         self.sync_fps_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        
         ctrl_layout_text.addWidget(self.sync_fps_label)
 
         ctrl_group_text.setLayout(ctrl_layout_text)
-        controls_row.addWidget(ctrl_group_text, stretch=1)
+        controls_row.addWidget(ctrl_group_text, stretch=4)
 
         left_panel.addLayout(controls_row)
 
@@ -464,7 +514,7 @@ class Dashboard(QMainWindow):
             self.prediction_engine.stop_prediction()
             self.prediction_btn.setText("Start Prediction")
             self.prediction_btn.setStyleSheet("""
-                QPushButton       { background-color: #2e7d32; font-size: 16px; }
+                QPushButton       { background-color: #2e7d32; font-size: 15px; }
                 QPushButton:hover { background-color: #388e3c; }
             """)
             return
@@ -486,7 +536,7 @@ class Dashboard(QMainWindow):
         self.prediction_engine.start_prediction()
         self.prediction_btn.setText("Stop Prediction")
         self.prediction_btn.setStyleSheet("""
-            QPushButton       { background-color: #c62828; font-size: 16px; }
+            QPushButton       { background-color: #c62828; font-size: 15px; }
             QPushButton:hover { background-color: #e53935; }
         """)
 
@@ -536,7 +586,6 @@ class Dashboard(QMainWindow):
                 f"subcontrol-position: top left; padding: 0 10px; left: 10px; }}"
             )
 
-        # Active node count
         active = sum(
             1 for s in self.device_status.values()
             if s in ('connected', 'calibrated')
@@ -574,7 +623,10 @@ class Dashboard(QMainWindow):
     def _update_fps(self):
         now = QDateTime.currentMSecsSinceEpoch()
         if now - self._last_fps_time >= 1000:
-            self.sync_fps_label.setText(f"Sync FPS: {self._sync_frames}")
+            if hasattr(self.sync_engine, 'sync_fps'):
+                self.sync_fps_label.setText(f"Sync FPS: {self.sync_engine.sync_fps}")
+            else:
+                self.sync_fps_label.setText(f"Sync FPS: {self._sync_frames}")
             self._sync_frames = 0
             self._last_fps_time = now
 

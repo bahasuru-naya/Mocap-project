@@ -1,16 +1,16 @@
 """
 PredictionEngine — real-time IMU → 3-D pose inference thread.
 
-Loads an ENSEMBLE of ONNX models (the 3 training seeds), runs each on the same
-input window and averages their outputs, exactly like EnsembleModel.predict()
-in the training notebook.
+Loads the self-contained ONNX model (best_model_overall_with_scalers.onnx).
+The scalers are baked into the ONNX computational graph:
+  raw IMU window -> [embedded scaler] -> [model ensemble] -> [embedded inverse scaler] -> pose
 
-Everything at inference is ONNX: the IMU scaler, the three models and the pose
-inverse scaler are all .onnx files (see src/convert_model_to_onnx.py), so no
-scikit-learn, joblib or TensorFlow is needed at runtime.
+No scalers, no scikit-learn, no TensorFlow. Only `onnxruntime` and `numpy`:
+  sess = ort.InferenceSession("best_model_overall_with_scalers.onnx")
+  pose = sess.run(None, {"imu_raw": raw_imu_window.astype("float32")[None]})[0][0]
+  joints = pose.reshape(17, 3)
 
-The window length is read from the ONNX model itself, so it always matches the
-training pipeline (currently 10 frames).
+The window length is read from the ONNX model itself (currently 10 frames).
 """
 
 import os
@@ -57,73 +57,45 @@ def fill_missing(X):
     return X
 
 
-class OnnxScaler:
-    """A StandardScaler exported to ONNX (transform or inverse transform).
+class PosePredictor:
+    """Loads the self-contained ONNX model with embedded scalers.
 
-    Call it with a float array of shape (N, n_features); it returns float32.
+    No external scalers, no scikit-learn, no TensorFlow needed at runtime.
+    Takes raw IMU window (window_size, 30) and produces pose in original units (17, 3).
     """
 
-    def __init__(self, path):
-        path = os.fspath(path)
-        if not path.lower().endswith(".onnx"):
-            raise ValueError(
-                f"Scaler must be an .onnx file, got '{path}'. "
-                "Run src/convert_model_to_onnx.py to create it from the .joblib file."
-            )
-        self.session = ort.InferenceSession(path, providers=['CPUExecutionProvider'])
-        model_input = self.session.get_inputs()[0]
-        self.input_name = model_input.name
-        self.n_features_in_ = int(model_input.shape[-1])
+    def __init__(self, model_path, prefer_gpu=False, **kwargs):
+        # Support list or single path for backwards compatibility
+        if isinstance(model_path, (list, tuple)):
+            found = [p for p in model_path if "with_scalers" in os.path.basename(str(p))]
+            model_path = found[0] if found else model_path[0]
 
-    def __call__(self, values):
-        values = np.ascontiguousarray(values, dtype="float32")
-        return self.session.run(None, {self.input_name: values})[0]
-
-
-class PoseEnsemble:
-    """Loads the trained ensemble and applies its shared IMU-to-pose pipeline."""
-
-    def __init__(self, model_paths, imu_scaler_path, pose_scaler_path, prefer_gpu=True):
-        print("[PredictionEngine] Loading scalers...")
-        self.imu_scaler = OnnxScaler(imu_scaler_path)
-        self.pose_scaler = OnnxScaler(pose_scaler_path)
-        if self.imu_scaler.n_features_in_ != len(IMU_COLS):
-            raise ValueError(
-                f"IMU scaler expects {self.imu_scaler.n_features_in_} features, "
-                f"pipeline provides {len(IMU_COLS)}"
-            )
-        if self.pose_scaler.n_features_in_ != len(POSE_COLS):
-            raise ValueError(
-                f"Pose scaler expects {self.pose_scaler.n_features_in_} features, "
-                f"pipeline provides {len(POSE_COLS)}"
-            )
+        self.model_path = os.fspath(model_path)
+        if not os.path.isfile(self.model_path):
+            raise FileNotFoundError(f"Model file not found: {self.model_path}")
 
         providers = self._select_providers(prefer_gpu)
-        self.sessions = [self._create_session(path, providers) for path in model_paths]
-        self.input_names = [session.get_inputs()[0].name for session in self.sessions]
+        self.session = self._create_session(self.model_path, providers)
 
-        input_shapes = {tuple(session.get_inputs()[0].shape[1:]) for session in self.sessions}
-        if len(input_shapes) != 1:
-            raise ValueError(f"Ensemble members have different input shapes: {input_shapes}")
-        self.window_size, feature_count = input_shapes.pop()
-        if feature_count != len(IMU_COLS):
+        model_input = self.session.get_inputs()[0]
+        self.input_name = model_input.name
+        shape = model_input.shape
+        self.window_size = int(shape[1]) if (len(shape) > 1 and shape[1] is not None) else 10
+        self.feature_count = int(shape[2]) if (len(shape) > 2 and shape[2] is not None) else len(IMU_COLS)
+
+        if self.feature_count != len(IMU_COLS):
             raise ValueError(
-                f"Model expects {feature_count} features, pipeline provides {len(IMU_COLS)}"
+                f"Model expects {self.feature_count} features, pipeline provides {len(IMU_COLS)}"
             )
 
-        output_shapes = {tuple(session.get_outputs()[0].shape[1:]) for session in self.sessions}
-        if len(output_shapes) != 1:
-            raise ValueError(f"Ensemble members have different output shapes: {output_shapes}")
-        output_shape = output_shapes.pop()
-        if int(np.prod(output_shape)) != len(POSE_COLS):
-            raise ValueError(
-                f"Model outputs {output_shape}, pipeline expects {len(POSE_COLS)} pose values"
-            )
+        model_output = self.session.get_outputs()[0]
+        self.output_name = model_output.name
 
-        dummy = np.zeros((1, self.window_size, len(IMU_COLS)), dtype="float32")
-        for session, input_name in zip(self.sessions, self.input_names):
-            session.run(None, {input_name: dummy})
-        print("[PredictionEngine] Model warm-up complete.")
+        # Model warm-up
+        dummy = np.zeros((1, self.window_size, self.feature_count), dtype="float32")
+        self.session.run(None, {self.input_name: dummy})
+        print(f"[PredictionEngine] Model warm-up complete. Window={self.window_size}, "
+              f"Input='{self.input_name}', Output='{self.output_name}'.")
 
     @staticmethod
     def _select_providers(prefer_gpu):
@@ -158,21 +130,43 @@ class PoseEnsemble:
         return session
 
     def predict_window(self, rows):
-        """Predict one pose from an unscaled (window_size, 30) IMU window."""
+        """Predict one pose from an unscaled (window_size, 30) raw IMU window.
+
+        Returns:
+            np.ndarray: (17, 3) joint coordinates in original units.
+        """
         X = np.asarray(rows, dtype="float32")
         expected_shape = (self.window_size, len(IMU_COLS))
         if X.shape != expected_shape:
             raise ValueError(f"Expected IMU window shape {expected_shape}, received {X.shape}")
 
         X = fill_missing(X.copy())
-        X_batch = self.imu_scaler(X)[np.newaxis, ...]
-        outputs = [
-            session.run(None, {input_name: X_batch})[0]
-            for session, input_name in zip(self.sessions, self.input_names)
-        ]
-        y_scaled = np.mean(outputs, axis=0)
-        y_pred = self.pose_scaler(y_scaled)[0]
-        return y_pred.reshape(17, 3)
+        # raw_imu_window: the last WINDOW_SIZE (10) raw IMU rows, shape (10, 30)
+        # pose = sess.run(None, {"imu_raw": raw_imu_window.astype("float32")[None]})[0][0]
+        # joints = pose.reshape(17, 3)
+        pose = self.session.run(None, {self.input_name: X.astype("float32")[None]})[0][0]
+        return pose.reshape(17, 3)
+
+    def predict_batch(self, windows):
+        """Predict a batch of poses from unscaled raw IMU windows.
+
+        Args:
+            windows: np.ndarray of shape (N, window_size, 30)
+        Returns:
+            np.ndarray: (N, 17, 3) joint coordinates in original units.
+        """
+        X = np.asarray(windows, dtype="float32")
+        if X.ndim != 3 or X.shape[1] != self.window_size or X.shape[2] != len(IMU_COLS):
+            raise ValueError(
+                f"Expected batch shape (N, {self.window_size}, {len(IMU_COLS)}), received {X.shape}"
+            )
+
+        for i in range(len(X)):
+            if np.isnan(X[i]).any():
+                X[i] = fill_missing(X[i])
+
+        poses = self.session.run(None, {self.input_name: X})[0]
+        return poses.reshape(-1, 17, 3)
 
     def predict_pose_from_imu(self, imu_window_df):
         """Predict one unscaled pose from a window of IMU rows in training column order."""
@@ -191,6 +185,10 @@ class PoseEnsemble:
         return pd.Series(pose, index=POSE_COLS)
 
 
+# Backwards-compatibility alias
+PoseEnsemble = PosePredictor
+
+
 # ====================================================================== #
 class PredictionEngine(threading.Thread):
     """
@@ -199,8 +197,8 @@ class PredictionEngine(threading.Thread):
     into *pose_queue* for the dashboard to visualise.
     """
 
-    def __init__(self, sync_queue, pose_queue, model_paths,
-                 imu_scaler_path, pose_scaler_path, prefer_gpu=True):
+    def __init__(self, sync_queue, pose_queue, model_path=None,
+                 imu_scaler_path=None, pose_scaler_path=None, prefer_gpu=False, **kwargs):
         super().__init__()
         self.sync_queue = sync_queue
         self.pose_queue = pose_queue
@@ -210,13 +208,16 @@ class PredictionEngine(threading.Thread):
         self._prediction_lock = threading.Lock()
         self._prediction_generation = 0
 
-        if isinstance(model_paths, (str, bytes)):      # single path still works
-            model_paths = [model_paths]
-        self.model_paths = list(model_paths)
-        self.predictor = PoseEnsemble(
-            self.model_paths,
-            imu_scaler_path,
-            pose_scaler_path,
+        if model_path is None:
+            model_paths = kwargs.get("model_paths")
+            if model_paths:
+                model_path = model_paths
+            else:
+                base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                model_path = os.path.join(base_dir, "model", "best_model_overall_with_scalers.onnx")
+
+        self.predictor = PosePredictor(
+            model_path=model_path,
             prefer_gpu=prefer_gpu,
         )
         self.window_size = self.predictor.window_size
@@ -226,12 +227,12 @@ class PredictionEngine(threading.Thread):
 
         # ----- FPS tracking ----- #
         self.inference_fps = 0
-        self.inference_ms = 0.0          # mean time per prediction (all ensemble members)
+        self.inference_ms = 0.0          # mean time per prediction
         self._ms_accum = 0.0
         self._frame_count = 0
         self._last_fps_time = time.time()
 
-        print(f"[PredictionEngine] Ready — ensemble={len(self.predictor.sessions)} models, "
+        print(f"[PredictionEngine] Ready — model='{os.path.basename(self.predictor.model_path)}', "
               f"window={self.window_size}, imu_features={len(IMU_COLS)}, "
               f"pose_outputs={len(POSE_COLS)}")
 
@@ -318,9 +319,8 @@ class PredictionEngine(threading.Thread):
     def _run_inference(self, generation, window_rows):
         try:
             t0 = time.perf_counter()
-            imu_window_df = pd.DataFrame(np.stack(window_rows), columns=IMU_COLS)
-            pose = self.predictor.predict_pose_from_imu(imu_window_df)
-            coords = pose.to_numpy(dtype="float32").reshape(17, 3)
+            raw_imu_window = np.stack(window_rows)
+            coords = self.predictor.predict_window(raw_imu_window)
 
             with self._prediction_lock:
                 if (

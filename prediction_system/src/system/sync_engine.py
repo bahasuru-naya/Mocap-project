@@ -37,6 +37,9 @@ class SyncEngine(threading.Thread):
         self.next_frame_time = None
         self.pending = deque(maxlen=100)
         self.latest_samples = {device: None for device in target_devices}
+        self.sync_fps = 0
+        self._sync_frame_count = 0
+        self._last_fps_time = time.monotonic()
 
     def _ingest_imu(self, data):
         device = data.get('node_id')
@@ -203,6 +206,7 @@ class SyncEngine(threading.Thread):
                 if any(sample is not None for sample in frame['imu'].values()):
                     try:
                         self.sync_queue.put_nowait(frame)
+                        self._sync_frame_count += 1
                     except queue.Full:
                         try:
                             self.sync_queue.get_nowait()
@@ -210,8 +214,14 @@ class SyncEngine(threading.Thread):
                             pass
                         try:
                             self.sync_queue.put_nowait(frame)
+                            self._sync_frame_count += 1
                         except queue.Full:
                             pass
+
+            if now - self._last_fps_time >= 1.0:
+                self.sync_fps = self._sync_frame_count
+                self._sync_frame_count = 0
+                self._last_fps_time = now
 
             time.sleep(0.005)
 

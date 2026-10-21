@@ -9,19 +9,32 @@ files produced by [data collection](../data_collection/README_MOCAP.md).
 Install the packages listed in `requirements.txt` in a Python environment. The
 system expects these files:
 
-- `model/best_model_overall_member0.onnx` through `member2.onnx`
-- `scalers/imu_scaler.joblib` and `scalers/pose_scaler.joblib`
+- `model/best_model_overall_with_scalers.onnx`
 
-The checked-in ensemble accepts a 10-row window of 30 ordered IMU features and
-returns 51 scaled pose values. The shared inference pipeline applies the IMU
-scaler, averages the three ONNX model outputs, reverses pose scaling, and
-reshapes the result into 17 `(x, y, z)` landmarks.
+The model has both the input standardizer (IMU features) and output inverse-scaler (3-D pose coordinates) baked directly into the ONNX computational graph:
 
-For a single-window prediction, `PoseEnsemble.predict_pose_from_imu` accepts a
+```text
+raw IMU window (10, 30) -> [embedded scaler] -> [model ensemble] -> [embedded inverse scaler] -> pose (51,)
+```
+
+No external scalers, no `scikit-learn`, and no `TensorFlow` are needed at runtime. Only `onnxruntime` and `numpy`:
+
+```python
+import numpy as np, onnxruntime as ort
+
+sess = ort.InferenceSession("model/best_model_overall_with_scalers.onnx", providers=["CPUExecutionProvider"])
+
+# raw_imu_window: the last WINDOW_SIZE (10) raw IMU rows, shape (10, 30), same column order as imu_cols
+pose = sess.run(None, {"imu_raw": raw_imu_window.astype("float32")[None]})[0][0]   # (51,) original units
+joints = pose.reshape(17, 3)                                                        # 17 joints x (x, y, z)
+```
+
+For a single-window prediction, `PosePredictor.predict_pose_from_imu` accepts a
 pandas DataFrame with the 30 IMU columns and 10 rows in oldest-to-newest order.
-It selects the columns in the training order, runs the same scaler/ensemble/
-inverse-scaler steps, and returns a pandas Series indexed by the 51 `cv_*`
-pose columns in original units. Both live inference and the recorded-CSV tool
+It selects the columns in the training order, runs inference, and returns a
+pandas Series indexed by the 51 `cv_*` pose columns in original units. For real-time
+streaming, `PosePredictor.predict_window` takes the `(10, 30)` NumPy array directly
+and returns a `(17, 3)` array of 3-D joints in sub-millisecond latency. Both live inference and the recorded-CSV tool
 use this same window prediction path.
 
 ## Test a recorded dataset (offline inference)
@@ -84,6 +97,12 @@ inference and clears its rolling input window while BLE streaming and clock
 synchronization continue. Live mode does not read a saved dataset. For
 post-recording inference against the saved CSV, use
 `Test\predict_pose_from_recording.py`.
+
+### 3-D Viewport & Motion Replay
+
+The 3-D skeleton viewport renders an upright human model (lateral X, depth Y, vertical height Z) in a uniform 1:1:1 metric aspect ratio, matching the coordinate system used during data collection and model training. Quick camera buttons allow switching between Perspective, Front, Side, and Top views, or freely rotating with the mouse.
+
+Click **Replay Recording...** on the dashboard to load any recorded CSV file and preview the predicted 3-D motion sequence directly without physical BLE hardware. For offline evaluation and accuracy reporting, run `Test\predict_pose_from_recording.py` (optional `--visualize` and `--save-animation` flags are available for 3-D animated previews).
 
 ## Training data
 

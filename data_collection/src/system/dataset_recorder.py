@@ -22,7 +22,8 @@ class DatasetRecorder:
         self._rows_since_flush = 0
         self._FLUSH_INTERVAL = 100  # flush to disk every N rows for crash safety
         self.sample_rate_hz = SAMPLE_RATE_HZ
-        self.max_sync_gap = 0.05
+        self.max_sync_gap = 0.05        
+        self.max_cv_sync_gap = 0.15
         self.recording_start_sync = None
         self.recording_start_epoch = None
         self.imu_samples = {device: [] for device in target_devices}
@@ -222,12 +223,18 @@ class DatasetRecorder:
                 datetime.fromtimestamp(system_time).strftime('%Y-%m-%d %H:%M:%S.%f'),
             ]
 
-            pose = self._nearest_pose(cv_stream, cv_times, target_sync)
+            pose = self._interpolate_pose(cv_times, cv_stream, target_sync)
             for point_index in range(17):
-                if pose is not None and point_index < len(pose) and len(pose[point_index]) >= 3:
-                    row.extend(pose[point_index][:3])
+                if (
+                    pose is not None
+                    and point_index < len(pose)
+                    and pose[point_index] is not None
+                ):
+                    row.extend(pose[point_index])
                 else:
-                    row.extend([0, 0, 0])
+                    # Missing landmark: leave empty (same as IMU) instead of
+                    # writing fake zeros.
+                    row.extend(['', '', ''])
 
             for device in self.target_devices:
                 sample_times, samples = imu_streams[device]
@@ -236,19 +243,52 @@ class DatasetRecorder:
             rows.append(row)
         return rows
 
-    def _nearest_pose(self, samples, sample_times, target_sync):
+    @staticmethod
+    def _pose_point(pose, point_index):
+        """Return [x, y, z] for a landmark, or None if it is not available."""
+        if pose is not None and point_index < len(pose) and len(pose[point_index]) >= 3:
+            return list(pose[point_index][:3])
+        return None
+
+    def _interpolate_pose(self, sample_times, samples, target_sync):
+        """Linearly interpolate the pose at target_sync (same logic as IMU).
+
+        Returns a list of 17 entries, each [x, y, z] or None, or None if no
+        usable CV sample is close enough in time.
+        """
         index = bisect.bisect_left(sample_times, target_sync)
-        candidates = samples[max(0, index - 1):index + 1]
+        before = samples[index - 1] if index > 0 else None
+        after = samples[index] if index < len(samples) else None
+
+        if before is not None and after is not None:
+            if before is after or before['sync_time'] == after['sync_time']:
+                return [self._pose_point(before['pose'], i) for i in range(17)]
+            gap = after['sync_time'] - before['sync_time']
+            if 0 < gap and self._within_sync_gap(gap, self.max_cv_sync_gap):
+                ratio = (target_sync - before['sync_time']) / gap
+                pose = []
+                for point_index in range(17):
+                    before_point = self._pose_point(before['pose'], point_index)
+                    after_point = self._pose_point(after['pose'], point_index)
+                    if before_point is not None and after_point is not None:
+                        pose.append([
+                            b + (a - b) * ratio
+                            for b, a in zip(before_point, after_point)
+                        ])
+                    else:
+                        pose.append(before_point or after_point)
+                return pose
+
         nearest = min(
-            candidates,
+            (sample for sample in (before, after) if sample is not None),
             key=lambda sample: abs(sample['sync_time'] - target_sync),
             default=None,
         )
-        if nearest is None or not self._within_sync_gap(
-            abs(nearest['sync_time'] - target_sync)
+        if nearest is not None and self._within_sync_gap(
+            abs(nearest['sync_time'] - target_sync), self.max_cv_sync_gap
         ):
-            return None
-        return nearest['pose']
+            return [self._pose_point(nearest['pose'], i) for i in range(17)]
+        return None
 
     def _interpolate_imu(self, sample_times, samples, target_sync):
         index = bisect.bisect_left(sample_times, target_sync)
@@ -277,9 +317,11 @@ class DatasetRecorder:
             return [nearest[axis] for axis in ('ax', 'ay', 'az', 'gx', 'gy', 'gz')]
         return None
 
-    def _within_sync_gap(self, gap):
-        return gap <= self.max_sync_gap or math.isclose(
-            gap, self.max_sync_gap, rel_tol=0.0, abs_tol=1e-9
+    def _within_sync_gap(self, gap, max_gap=None):
+        if max_gap is None:
+            max_gap = self.max_sync_gap
+        return gap <= max_gap or math.isclose(
+            gap, max_gap, rel_tol=0.0, abs_tol=1e-9
         )
 
     def _summarize_missing_data(self, header, rows):
@@ -304,7 +346,7 @@ class DatasetRecorder:
         for row in rows:
             for point_index in range(17):
                 coordinates = row[2 + point_index * 3:5 + point_index * 3]
-                # record_frame() zero-pads missing CV landmarks.
+                # Missing CV landmarks are written as empty cells.
                 if (
                     any(not str(value).strip() for value in coordinates)
                     or all(float(value) == 0 for value in coordinates)

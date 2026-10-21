@@ -6,35 +6,37 @@ import threading
 import multiprocessing as mp_proc
 
 
-class FreshFrameGrabber(threading.Thread):
-    """Continuously drains the camera buffer to guarantee zero-latency fresh frames."""
+class QueuedFrameGrabber(threading.Thread):
+    """Captures every frame with an accurate arrival timestamp and queues it in order.
+    Inference happens later, so no frames are dropped and timestamps stay evenly
+    spaced by the camera, not by inference speed."""
     def __init__(self, camera_index=0):
         super().__init__()
         # Use DirectShow backend on Windows for lower latency
         self.cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        
-        self.latest_frame = None
-        self.latest_frame_time = 0.0
-        self.latest_sync_time = 0.0
+
+        # Unbounded: no frame is ever dropped (this is recording, not real time)
+        self.frames = queue.Queue()
         self.running = True
         self.daemon = True
-        self.new_frame_event = threading.Event()
 
     def run(self):
         while self.running and self.cap.isOpened():
-            success, frame = self.cap.read()
-            if not success:
+            # grab() returns as soon as the next frame is ready from the camera,
+            # so timestamp immediately after it, BEFORE the slower decode step.
+            if not self.cap.grab():
                 time.sleep(0.005)
                 continue
-            
-            # Timestamp the EXACT moment the frame arrived from the camera hardware
-            self.latest_frame_time = time.time()
-            self.latest_sync_time = time.monotonic()
-            self.latest_frame = frame
-            self.new_frame_event.set()
+            t_sys = time.time()
+            t_mono = time.monotonic()
+
+            success, frame = self.cap.retrieve()
+            if not success:
+                continue
+
+            self.frames.put((frame, t_sys, t_mono))
 
     def stop(self):
         self.running = False
@@ -59,7 +61,7 @@ class CVProcess(mp_proc.Process):
             min_tracking_confidence=0.5
         )
         
-        grabber = FreshFrameGrabber(0)
+        grabber = QueuedFrameGrabber(0)
         grabber.start()
 
         allowed_body_indices = list(range(11, 17)) + list(range(23, 33))
@@ -67,14 +69,11 @@ class CVProcess(mp_proc.Process):
         
         try:
             while not self.stop_event.is_set():
-                # Wait for the next fresh frame (timeout to permit clean shutdown check)
-                if not grabber.new_frame_event.wait(timeout=0.1):
+                # Take the next frame IN ORDER (timeout to permit clean shutdown check)
+                try:
+                    image, frame_time, frame_sync_time = grabber.frames.get(timeout=0.1)
+                except queue.Empty:
                     continue
-                grabber.new_frame_event.clear()
-
-                image = grabber.latest_frame
-                frame_time = grabber.latest_frame_time
-                frame_sync_time = grabber.latest_sync_time
 
                 if image is None:
                     continue
