@@ -345,27 +345,27 @@ class Dashboard(QMainWindow):
         cam_bar.addWidget(lbl_cam)
 
         btn_persp = QPushButton("Perspective")
-        btn_persp.setFixedHeight(30)
+        btn_persp.setFixedHeight(35)
         btn_persp.clicked.connect(lambda: self.canvas.set_view(15, -70))
         cam_bar.addWidget(btn_persp)
 
         btn_front = QPushButton("Front")
-        btn_front.setFixedHeight(30)
+        btn_front.setFixedHeight(35)
         btn_front.clicked.connect(lambda: self.canvas.set_view(0, -90))
         cam_bar.addWidget(btn_front)
 
         btn_side = QPushButton("Side")
-        btn_side.setFixedHeight(30)
+        btn_side.setFixedHeight(35)
         btn_side.clicked.connect(lambda: self.canvas.set_view(0, 0))
         cam_bar.addWidget(btn_side)
 
         btn_top = QPushButton("Top")
-        btn_top.setFixedHeight(30)
+        btn_top.setFixedHeight(35)
         btn_top.clicked.connect(lambda: self.canvas.set_view(89, -90))
         cam_bar.addWidget(btn_top)
 
         btn_reset = QPushButton("Reset Camera")
-        btn_reset.setFixedHeight(30)
+        btn_reset.setFixedHeight(35)
         btn_reset.setStyleSheet("QPushButton { background-color: #2c3e50; }")
         btn_reset.clicked.connect(self.canvas.reset_view)
         cam_bar.addWidget(btn_reset)
@@ -402,30 +402,35 @@ class Dashboard(QMainWindow):
         ctrl_layout.addWidget(self.prediction_btn)
 
         ctrl_group.setLayout(ctrl_layout)
-        controls_row.addWidget(ctrl_group, stretch=5)
+        controls_row.addWidget(ctrl_group, stretch=4)
 
         ctrl_group_text = QGroupBox("System Information")
         ctrl_layout_text = QHBoxLayout()
-        ctrl_layout_text.setContentsMargins(15, 15, 15, 15)
+        ctrl_layout_text.setContentsMargins(15, 15, 15, 15)        
+        ctrl_layout_text.setSpacing(50)
         
         self.pred_fps_label = QLabel("Prediction FPS: --")
         self.pred_fps_label.setStyleSheet(
-            "font-size: 18px; font-weight: bold; color: #b3b3b3;"
+            "font-size: 18px; font-weight: bold; color: #b3b3b3; border: 1px solid #333333; border-radius: 6px; padding: 5px;"
         )
+        self.pred_fps_label.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+        self.pred_fps_label.setFixedWidth(180)
         ctrl_layout_text.addWidget(self.pred_fps_label)
 
         self.active_nodes_label = QLabel("Active Nodes: 0/5")
         self.active_nodes_label.setStyleSheet(
-            "font-size: 18px; font-weight: bold; color: #b3b3b3;"
+            "font-size: 18px; font-weight: bold; color: #b3b3b3; border: 1px solid #333333; border-radius: 6px; padding: 5px;"
         )
-        self.active_nodes_label.setAlignment(Qt.AlignCenter)
+        self.active_nodes_label.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+        self.active_nodes_label.setFixedWidth(180)
         ctrl_layout_text.addWidget(self.active_nodes_label)
 
         self.sync_fps_label = QLabel("Sync FPS: 0")
         self.sync_fps_label.setStyleSheet(
-            "font-size: 18px; font-weight: bold; color: #b3b3b3;"
+            "font-size: 18px; font-weight: bold; color: #b3b3b3; border: 1px solid #333333; border-radius: 6px; padding: 5px;"
         )
-        self.sync_fps_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.sync_fps_label.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+        self.sync_fps_label.setFixedWidth(140)
         ctrl_layout_text.addWidget(self.sync_fps_label)
 
         ctrl_group_text.setLayout(ctrl_layout_text)

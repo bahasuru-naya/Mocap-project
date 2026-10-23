@@ -258,26 +258,48 @@ class Dashboard(QMainWindow):
         controls_group.setLayout(controls_group_layout)
         left_panel.addWidget(controls_group)
         
-        # Sync Status Group - Enhanced
+        # System Information Group
         sync_group = QGroupBox("System information")
-        sync_layout = QHBoxLayout()
-        sync_layout.setContentsMargins(20, 20, 20, 20)
-        
+        sync_main_layout = QVBoxLayout()
+        sync_main_layout.setContentsMargins(20, 20, 20, 20)
+
+        # First row: Live Readout Rate and Active Nodes
+        first_row = QHBoxLayout()
+        first_row.setSpacing(20)
+
         self.sync_rate_label = QLabel("Live Readout Rate: 0 FPS")
-        self.sync_rate_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #b3b3b3;")
-        sync_layout.addWidget(self.sync_rate_label)
-        
+        self.sync_rate_label.setStyleSheet(
+            "font-size: 18px; font-weight: bold; color: #b3b3b3; "
+            "border: 1px solid #333333; border-radius: 6px; padding: 5px;"
+        )
+        self.sync_rate_label.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+        self.sync_rate_label.setFixedHeight(40)
+        first_row.addWidget(self.sync_rate_label)
+
         self.active_nodes_label = QLabel("Active Nodes: 0/5")
-        self.active_nodes_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #b3b3b3;")
-        self.active_nodes_label.setAlignment(Qt.AlignCenter)
-        sync_layout.addWidget(self.active_nodes_label)
-        
+        self.active_nodes_label.setStyleSheet(
+            "font-size: 18px; font-weight: bold; color: #b3b3b3; "
+            "border: 1px solid #333333; border-radius: 6px; padding: 5px;"
+        )
+        self.active_nodes_label.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+        self.active_nodes_label.setFixedHeight(40)
+        first_row.addWidget(self.active_nodes_label)
+
+        sync_main_layout.addLayout(first_row)
+
+        # Second row: Recording Status
         self.recording_status_label = QLabel("Status: IDLE")
-        self.recording_status_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #b3b3b3;")
-        self.recording_status_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        sync_layout.addWidget(self.recording_status_label)
-        
-        sync_group.setLayout(sync_layout)
+        self.recording_status_label.setStyleSheet(
+            "font-size: 18px; font-weight: bold; color: #b3b3b3; "
+            "border: 1px solid #333333; border-radius: 6px; padding: 5px;"
+        )
+        self.recording_status_label.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+        self.recording_status_label.setFixedHeight(40)
+
+        sync_main_layout.addWidget(self.recording_status_label)
+
+        # Apply layout
+        sync_group.setLayout(sync_main_layout)
         left_panel.addWidget(sync_group)
         
         main_layout.addLayout(left_panel, 7)
@@ -387,7 +409,7 @@ class Dashboard(QMainWindow):
                 self.session_input.setEnabled(False)
                 self.recording_elapsed_timer.start()
                 self.recording_status_label.setText("Status: RECORDING | Elapsed: 00:00:00")
-                self.recording_status_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #cf6679;")
+                self.recording_status_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #cf6679;border: 1px solid #333333; border-radius: 6px; padding: 5px;")
         else:
             save_result = self.recorder.stop_recording()
             self.recording_elapsed_timer.invalidate()
@@ -398,7 +420,7 @@ class Dashboard(QMainWindow):
             """)
             self.session_input.setEnabled(True)
             self.recording_status_label.setText("Status: IDLE")
-            self.recording_status_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #b3b3b3;")
+            self.recording_status_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #b3b3b3;border: 1px solid #333333; border-radius: 6px; padding: 5px;")
 
             if save_result:
                 missing_data = save_result['missing_data']
