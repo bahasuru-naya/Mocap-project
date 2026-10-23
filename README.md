@@ -8,13 +8,6 @@ generating predictions from recorded CSV files.
 
 ## System overview
 
-```text
-Five ESP32/BMI160 nodes ──BLE──┬── Data collection app ── synchronized CSV
-                              └── Live prediction app ── 3-D pose dashboard
-Webcam ── MediaPipe ───────────── Data collection app ── pose labels in CSV
-Recorded CSV ──────────────────── Offline prediction tool ── prediction CSV
-```
-
 Each node sends accelerometer and gyroscope measurements, a sequence number,
 and its uptime over BLE. The collection application also captures camera pose
 landmarks using MediaPipe. Collection and live prediction both use the shared
@@ -108,10 +101,7 @@ synchronization continue. Live prediction uses no webcam input.
 
 The live synchronizer freezes the same shared clock-offset estimates used by
 collection, then interpolates or holds samples on a 20 Hz grid using a 50 ms
-tolerance. The model takes a 10-row window of 30 IMU features. Three ONNX
-ensemble members are averaged, and the pose scaler converts the result back
-to landmark coordinates. Required ONNX models and scalers are in
-`prediction_system\model\` and `prediction_system\scalers\`.
+tolerance. The model takes a 10-row window of 30 IMU features. 
 
 More information is available in the
 [prediction-system guide](./prediction_system/README.md).

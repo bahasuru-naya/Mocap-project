@@ -98,19 +98,10 @@ synchronization continue. Live mode does not read a saved dataset. For
 post-recording inference against the saved CSV, use
 `Test\predict_pose_from_recording.py`.
 
-### 3-D Viewport & Motion Replay
+### 3-D Viewport 
 
 The 3-D skeleton viewport renders an upright human model (lateral X, depth Y, vertical height Z) in a uniform 1:1:1 metric aspect ratio, matching the coordinate system used during data collection and model training. Quick camera buttons allow switching between Perspective, Front, Side, and Top views, or freely rotating with the mouse.
 
-Click **Replay Recording...** on the dashboard to load any recorded CSV file and preview the predicted 3-D motion sequence directly without physical BLE hardware. For offline evaluation and accuracy reporting, run `Test\predict_pose_from_recording.py` (optional `--visualize` and `--save-animation` flags are available for 3-D animated previews).
 
-## Training data
 
-The collection CSV contains 30 IMU input features and 51 camera-derived pose
-targets per aligned row. Use the IMU columns as `X` and the matching `cv_*`
-columns as `y`; exclude `sys_time` and `local_time`. Filter or mask rows with
-zero-padded missing poses, and handle blank sensor cells deliberately. The
-repository includes pre-trained model/scaler artifacts and conversion code,
-but does not currently provide the training procedure that generated those
-artifacts. Retraining requires a compatible supervised training pipeline and
-regenerating both scalers and all ensemble members together.
+
